@@ -1,0 +1,14 @@
+# Never commit credentials
+.envrc
+.env
+*.env
+credentials.json
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude cache
+.claude/
