@@ -27,39 +27,67 @@ Output is a JSON object:
 
 The `missing` field lists what's absent. Possible values: `govc`, `config`, `keychain`.
 
-**🔐 CRITICAL SECURITY RULE — DO NOT collect credentials via chat.**
+**🔐 CRITICAL SECURITY RULES:**
 
-Do NOT ask the user for their password in chat. Do NOT ask for hostname/username either (they're less sensitive, but uniform handling is safer). Instead, output the following **command for the user to run in their OWN terminal**:
-
-```bash
-bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
-```
-
-(For a non-default profile: `ESXI_PROFILE=lab bash ~/.claude/skills/esxi/scripts/setup-interactive.sh`)
-
-This script:
-- Prompts for host / username / cert type / password interactively in the user's terminal
-- Reads password with `read -rsp` (hidden, never printed, never shell history)
-- Installs govc if missing
-- Saves everything appropriately (config → `~/.config/esxi-skill/<profile>.env`; password → macOS Keychain)
-- Verifies the connection
+- DO NOT ask the user for their password in chat.
+- DO NOT auto-trigger GUI dialogs, `read -rsp` prompts, or anything that spawns interactive input from a subprocess Claude started.
+- Claude's role here is purely **advisory**: print copy-pasteable commands for the user to review and run themselves in their own terminal. The user chooses the input method for the password (Keychain Access.app, OS password manager, or a CLI prompt they themselves type). Claude never sees or handles the password.
 
 **What Claude should do**:
 
-1. Detect the setup is needed (from preflight output).
-2. Tell the user clearly: "To configure, please run this command in your terminal:" and show the exact command above.
-3. Wait for the user to reply (e.g. "done", "配好了", or similar). Do NOT push the user to share the password or any field.
-4. Once the user confirms, **re-run `preflight.sh`** to verify. If `ready: true`, proceed to the original request.
-5. If preflight still fails, show the JSON output to help debug, and suggest re-running the interactive setup.
+1. **Ask the user for the non-sensitive fields only** (each field in its own line in the chat, waiting for reply):
+   - ESXi / vCenter host (e.g. `esxi.lab`)
+   - Username (e.g. `root`)
+   - Self-signed cert? y/n (→ `GOVC_INSECURE=1` or `0`)
+   - Datacenter (default `ha-datacenter`)
+
+2. **Output a single copy-pasteable command block** with those values filled in. The block has three parts; ask the user to run them (or tell them to pick one of the two password options). Do not run any of this via the Bash tool — the user runs it in their own terminal.
+
+   ```bash
+   # ─── 1. Install govc (macOS) ──────────────────────────────────────────
+   command -v govc >/dev/null || brew install govc
+
+   # ─── 2. Write non-sensitive config ────────────────────────────────────
+   mkdir -p ~/.config/esxi-skill && chmod 700 ~/.config/esxi-skill
+   cat > ~/.config/esxi-skill/default.env <<'EOF'
+   export GOVC_URL='<HOST>'
+   export GOVC_USERNAME='<USER>'
+   export GOVC_INSECURE=<1|0>
+   export GOVC_DATACENTER='<DC>'
+   export ESXI_CRED_SERVICE='govc-<HOST>'
+   EOF
+   chmod 600 ~/.config/esxi-skill/default.env
+
+   # ─── 3. Store password in login Keychain — pick ONE of the two ────────
+
+   # Option A (recommended): Keychain Access.app GUI
+   #   open -a "Keychain Access"
+   #   File ▸ New Password Item…
+   #     Keychain Item Name: govc-<HOST>
+   #     Account Name:       <USER>
+   #     Password:           (type here in native secure field)
+
+   # Option B: CLI with silent prompt (password never in history/args)
+   IFS= read -rs -p "ESXi password: " PW && echo && \
+     security add-generic-password -a '<USER>' -s 'govc-<HOST>' -w "$PW" -U && \
+     unset PW && echo "✓ saved to Keychain"
+   ```
+
+3. **Explain the two options briefly**:
+   - **Option A** (Keychain Access.app) — fully native, password never enters any shell. Most secure.
+   - **Option B** — password briefly in shell memory during `read`/`security` execution. Acceptable for most threat models; not in shell history, not in process args (because `-w "$PW"` resolves the variable before exec).
+
+4. **Wait for the user to confirm** ("done"/"好了"/etc.).
+
+5. **Re-run preflight** (`~/.claude/skills/esxi/scripts/preflight.sh`). If `ready: true`, proceed to the original request. If still failing, show the JSON and help debug.
+
+**For Linux / Windows**: output the equivalent block using `secret-tool` / `cmdkey` — see [references/setup-commands.md](references/setup-commands.md) for OS-specific templates.
 
 **Why this matters**:
-- Password never passes through the LLM, chat log, or clipboard.
-- Password is entered via OS-native secure-input mechanism:
-  - **macOS**: `osascript` dialog with hidden-answer (native `NSSecureTextField`); the password flows from the dialog directly into the login Keychain via `security`, never touching the shell environment.
-  - **Linux**: `secret-tool` (libsecret) if available — the keyring daemon prompts via its own agent; falls back to `zenity` GUI dialog, then to `read -rsp`.
-  - **Windows**: PowerShell `Get-Credential` + `cmdkey` (Windows Credential Manager).
-- Claude is fully auditable: anyone reading the chat log sees zero credentials.
-- The `g` wrapper reads the password from whichever backend is appropriate per OS.
+- Credentials never pass through the LLM or chat log.
+- No hidden side effects from Claude — the user sees every action before it runs.
+- Password entry uses either OS-native secure storage GUI (most secure) or a CLI path the user typed themselves.
+- The `g` wrapper reads the password from the Keychain on each call; it's the same regardless of which option the user picked.
 
 ### Step 3 — Run the Actual Request
 

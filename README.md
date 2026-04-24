@@ -25,36 +25,36 @@ Clone this repository into your Claude Code skills directory (use the clone URL 
 
 ## Setup
 
-This skill auto-configures itself the first time you invoke it — no manual prep needed.
+When you ask Claude something like *"list all VMs on my ESXi host"*, and nothing has been configured yet:
 
-When you ask Claude something like *"list all VMs on my ESXi host"*, it will:
-
-1. Run `scripts/preflight.sh` to detect what's missing.
-2. If anything is missing, Claude will tell you to run this in **your own terminal**:
-   ```bash
-   bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
-   ```
-3. The interactive script prompts you for host / username / cert type / password. **Password is read silently (no echo, never in chat, never in shell history).**
-4. The script then:
-   - Installs `govc` (Homebrew on macOS, release tarball on Linux)
-   - Writes config to `~/.config/esxi-skill/default.env`
-   - Stores password in macOS Keychain (never in plain text on disk)
-   - Verifies the connection with `govc about`
-5. Tell Claude "done", Claude re-runs preflight, and executes your original request using the `scripts/g` wrapper.
+1. Claude runs `scripts/preflight.sh` to detect what's missing.
+2. Claude asks you (in chat) for **non-sensitive** fields only: host, username, cert type, datacenter.
+3. Claude outputs a **copy-pasteable command block** for you to run in your own terminal. The block has three parts:
+   - Install `govc` if missing
+   - Write config to `~/.config/esxi-skill/default.env` (non-sensitive values only)
+   - Store password — **you pick the method**:
+     - **Keychain Access.app** (recommended, most secure, fully GUI)
+     - `security add-generic-password` CLI with a silent `read -rs` prompt
+4. You run the commands. Claude never executes them and never sees your password.
+5. Tell Claude "done". Claude re-runs preflight, then executes your original request using the `scripts/g` wrapper.
 
 ### 🔐 Security design
 
-**Credentials never pass through the LLM or chat log.** The interactive script runs entirely in your terminal; Claude just points you at it and waits for you to confirm. Same trust boundary as `sudo` or `ssh`.
+- Claude's role is **advisory**: it prints commands for you to review and run, not the other way around.
+- Credentials never pass through the LLM, chat log, or any process Claude started.
+- The password only enters either (a) macOS's native Keychain Access secure field, or (b) a `read -rs` shell prompt that you typed yourself.
 
-### Non-interactive alternative
+For Linux / Windows equivalents (libsecret, Credential Manager), see [references/setup-commands.md](references/setup-commands.md).
 
-For automation (CI, Ansible, etc.) where you already have the password in an env var or vault:
+### Non-interactive alternative (CI / Ansible)
+
+For automation where you already have the password in an env var or vault:
 
 ```bash
 echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
 ```
 
-Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is piped via stdin (so it doesn't appear in shell history or process listings).
+Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is piped via stdin (not in args → not in process listings or shell history).
 
 ### Multi-profile
 
@@ -105,12 +105,12 @@ esxi-skill/
 ├── LICENSE
 ├── scripts/
 │   ├── preflight.sh                  # Check state; JSON output
-│   ├── setup-interactive.sh          # User-run setup: prompts silently in terminal
-│   ├── setup.sh                      # Non-interactive setup (for automation)
-│   └── g                             # govc wrapper (auto-loads Keychain password)
+│   ├── setup.sh                      # Non-interactive setup (for CI/automation)
+│   └── g                             # govc wrapper (reads password from Keychain/libsecret)
 └── references/
     ├── govc-reference.md             # Full command catalog by category
     ├── common-operations.md          # 12 recipes: health check, clone+cloud-init, migrate, etc.
+    ├── setup-commands.md             # Per-OS copy-pasteable setup command blocks
     └── troubleshooting.md            # Common errors with fixes
 ```
 

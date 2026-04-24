@@ -25,30 +25,30 @@
 
 ## 配置
 
-这个 skill 第一次使用时会**自动完成所有前置工作**，你不用提前准备。
+当你对 Claude 说"列出 ESXi 上的所有虚拟机"而还没配置过时：
 
-当你对 Claude 说"列出 ESXi 上的所有虚拟机"之类的话，它会：
-
-1. 跑 `scripts/preflight.sh` 检测缺什么
-2. 缺东西时，Claude 会让你**在自己的终端**里执行：
-   ```bash
-   bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
-   ```
-3. 脚本在终端里交互式问你：地址 / 用户名 / 证书类型 / 密码。**密码用 `read -rsp` 静默读取，不回显、不进 chat、不进 shell history。**
-4. 脚本自动完成：
-   - 安装 `govc`（macOS 用 brew，Linux 用 GitHub 发布包）
-   - 写配置到 `~/.config/esxi-skill/default.env`
-   - 密码存到 macOS Keychain（不明文落地）
-   - 用 `govc about` 验证连接
-5. 你跟 Claude 说一句"好了"，Claude 重新跑 preflight 确认通过，然后用 `scripts/g` 包装器执行你的原始请求
+1. Claude 跑 `scripts/preflight.sh` 检测缺什么
+2. Claude 在聊天里问你**非敏感字段**：地址、用户名、证书类型、datacenter
+3. Claude 输出一段**可直接复制粘贴的命令块**，让你在自己的终端里跑。命令分三部分：
+   - 缺 `govc` 就装 `govc`
+   - 写配置到 `~/.config/esxi-skill/default.env`（只存非敏感值）
+   - 存密码 —— **你自己选方式**：
+     - **Keychain Access.app**（推荐，最安全，全 GUI）
+     - `security add-generic-password` CLI + 一个 `read -rs` 的静默提示
+4. 你自己跑命令。Claude 不执行、也不接触密码
+5. 跟 Claude 说"好了"，Claude 重新跑 preflight，然后用 `scripts/g` 包装器执行你的原请求
 
 ### 🔐 安全设计
 
-**凭据绝不经过 LLM 或聊天记录。** 交互脚本全程在你的终端里跑，Claude 只是指引你运行它、等你确认。信任边界跟 `sudo`、`ssh` 相同。
+- Claude 只提**建议**：它输出命令给你审、让你自己跑，而不是反过来
+- 凭据绝不经过 LLM、聊天记录、或任何 Claude 发起的进程
+- 密码只会进入：(a) macOS 原生 Keychain Access 的安全输入框，或 (b) 你自己敲的 `read -rs` 命令提示符
 
-### 非交互式初始化（自动化场景）
+Linux / Windows 的对应命令（libsecret / Credential Manager）见 [references/setup-commands.md](references/setup-commands.md)。
 
-在 CI、Ansible 等自动化场景，密码已在环境变量或 vault 里时可以直接调：
+### 非交互式初始化（CI / Ansible）
+
+密码已在环境变量或 vault 里时直接调：
 
 ```bash
 echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
@@ -105,12 +105,12 @@ esxi-skill/
 ├── LICENSE
 ├── scripts/
 │   ├── preflight.sh                  # 状态检测，JSON 输出
-│   ├── setup-interactive.sh          # 用户在终端运行的交互脚本（静默读密码）
-│   ├── setup.sh                      # 非交互版（自动化场景）
-│   └── g                             # govc 包装器（自动读 Keychain 密码）
+│   ├── setup.sh                      # 非交互版（CI/自动化场景）
+│   └── g                             # govc 包装器（自动读 Keychain/libsecret 密码）
 └── references/
     ├── govc-reference.md             # 按分类的完整命令速查
     ├── common-operations.md          # 12 个实战 recipe：健康检查、克隆+cloud-init、批量迁移等
+    ├── setup-commands.md             # 各操作系统的配置命令模板
     └── troubleshooting.md            # 常见错误及修复方法
 ```
 
