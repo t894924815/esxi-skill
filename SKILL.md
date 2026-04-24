@@ -54,8 +54,12 @@ This script:
 
 **Why this matters**:
 - Password never passes through the LLM, chat log, or clipboard.
-- User's terminal `read -rsp` is the trusted input boundary, same mechanism `sudo`/`ssh` use.
-- Keeps Claude auditable: anyone reading the chat log sees zero credentials.
+- Password is entered via OS-native secure-input mechanism:
+  - **macOS**: `osascript` dialog with hidden-answer (native `NSSecureTextField`); the password flows from the dialog directly into the login Keychain via `security`, never touching the shell environment.
+  - **Linux**: `secret-tool` (libsecret) if available — the keyring daemon prompts via its own agent; falls back to `zenity` GUI dialog, then to `read -rsp`.
+  - **Windows**: PowerShell `Get-Credential` + `cmdkey` (Windows Credential Manager).
+- Claude is fully auditable: anyone reading the chat log sees zero credentials.
+- The `g` wrapper reads the password from whichever backend is appropriate per OS.
 
 ### Step 3 — Run the Actual Request
 
