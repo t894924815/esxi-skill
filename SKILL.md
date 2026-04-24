@@ -46,21 +46,31 @@ The `missing` field lists what's absent. Possible values: `govc`, `config`, `key
 - DO NOT send the password to external agents (codex, other LLMs) for review — review the code, not the runtime state.
 - Claude's role here is purely **advisory**: print copy-pasteable commands for the user to review and run themselves in their own terminal. The user chooses the input method for the password (Keychain Access.app, OS password manager, or a CLI prompt they themselves type). Claude never sees or handles the password.
 
-**What Claude should do**:
+**CORE PRINCIPLE — Split of Responsibility**:
 
-1. **Ask the user for the non-sensitive fields only** (each field in its own line in the chat, waiting for reply):
-   - ESXi / vCenter host (e.g. `esxi.lab`)
-   - Username (e.g. `root`)
+| Action | Who does it | Why |
+|---|---|---|
+| Install govc | **Claude auto-runs** via Bash tool | No secret; standard package install |
+| Write config file (host/user/cert/dc) | **Claude auto-runs** via Bash tool | Values are non-sensitive; user already told Claude them |
+| Store password in Keychain | **USER runs** in their own terminal | Password must never pass through Claude |
+
+Only the password step is handed back to the user. Everything else Claude should just do.
+
+**What Claude MUST do, in order**:
+
+1. **Ask the user for the non-sensitive fields** (one short chat prompt; wait for reply):
+   - ESXi / vCenter host (e.g. `esxi.lab` or `10.0.0.2`)
+   - Username (default `root`)
    - Self-signed cert? y/n (→ `GOVC_INSECURE=1` or `0`)
-   - Datacenter (default `ha-datacenter`)
+   - Datacenter (default `ha-datacenter` for standalone ESXi)
 
-2. **Output a single copy-pasteable command block** with those values filled in. The block has three parts; ask the user to run them (or tell them to pick one of the two password options). Do not run any of this via the Bash tool — the user runs it in their own terminal.
-
+2. **Auto-install govc if missing** (via Bash tool):
    ```bash
-   # ─── 1. Install govc (macOS) ──────────────────────────────────────────
    command -v govc >/dev/null || brew install govc
+   ```
 
-   # ─── 2. Write non-sensitive config ────────────────────────────────────
+3. **Auto-write the config file** (via Bash tool, substituting the fields collected in step 1):
+   ```bash
    mkdir -p ~/.config/esxi-skill && chmod 700 ~/.config/esxi-skill
    cat > ~/.config/esxi-skill/default.env <<'EOF'
    export GOVC_URL='<HOST>'
@@ -70,37 +80,37 @@ The `missing` field lists what's absent. Possible values: `govc`, `config`, `key
    export ESXI_CRED_SERVICE='govc-<HOST>'
    EOF
    chmod 600 ~/.config/esxi-skill/default.env
-
-   # ─── 3. Store password in login Keychain — pick ONE of the two ────────
-
-   # Option A (recommended): Keychain Access.app GUI
-   #   open -a "Keychain Access"
-   #   File ▸ New Password Item…
-   #     Keychain Item Name: govc-<HOST>
-   #     Account Name:       <USER>
-   #     Password:           (type here in native secure field)
-
-   # Option B: CLI with silent prompt (password never in history/args)
-   IFS= read -rs -p "ESXi password: " PW && echo && \
-     security add-generic-password -a '<USER>' -s 'govc-<HOST>' -w "$PW" -U && \
-     unset PW && echo "✓ saved to Keychain"
    ```
 
-3. **Explain the two options briefly**:
-   - **Option A** (Keychain Access.app) — fully native, password never enters any shell. Most secure.
-   - **Option B** — password briefly in shell memory during `read`/`security` execution. Acceptable for most threat models; not in shell history, not in process args (because `-w "$PW"` resolves the variable before exec).
+4. **Run preflight** (via Bash). Expect it to now report only `missing: ["keychain"]` — the last thing left is the password.
 
-4. **Wait for the user to confirm** ("done"/"好了"/etc.).
+5. **Output ONLY the password step for the user to run in their own terminal.** Present two options; recommend A:
 
-5. **Re-run preflight** (`~/.claude/skills/esxi/scripts/preflight.sh`). If `ready: true`, proceed to the original request. If still failing, show the JSON and help debug.
+   **Option A (recommended)** — `security` CLI's native prompt (no shell exposure, asks to retype):
+   ```bash
+   security add-generic-password -a '<USER>' -s 'govc-<HOST>' -U -w
+   ```
+   Placing `-w` last without a value makes `security` prompt interactively. Documented in `man security`: "Specify -w as the last option to be prompted."
 
-**For Linux / Windows**: output the equivalent block using `secret-tool` / `cmdkey` — see [references/setup-commands.md](references/setup-commands.md) for OS-specific templates.
+   **Option B** — Keychain Access.app GUI:
+   ```bash
+   open -a "Keychain Access"
+   # Then File ▸ New Password Item…
+   #   Keychain Item Name: govc-<HOST>
+   #   Account Name:       <USER>
+   #   Password:           (type into the native secure field)
+   ```
 
-**Why this matters**:
-- Credentials never pass through the LLM or chat log.
-- No hidden side effects from Claude — the user sees every action before it runs.
-- Password entry uses either OS-native secure storage GUI (most secure) or a CLI path the user typed themselves.
-- The `g` wrapper reads the password from the Keychain on each call; it's the same regardless of which option the user picked.
+6. **Wait for the user to confirm** ("done"/"好了"/etc.). Don't keep running things in the background while waiting.
+
+7. **Re-run preflight** (via Bash). If `ready: true`, proceed to Step 3 — execute the user's original request with `scripts/g`. If still failing, show the JSON and help debug (e.g. ask them to re-run the password step).
+
+**For Linux / Windows**: Same split applies — Claude auto-installs and writes config; the user runs the OS-native keyring command for the password. See [references/setup-commands.md](references/setup-commands.md) for OS-specific templates.
+
+**Why this split**:
+- **Auto for non-secrets** = less friction. Typing `brew install govc` and a multi-line heredoc by hand would annoy users for no security gain.
+- **User-manual for password** = the password never passes through Claude's chat log, Bash tool calls, or any file Claude wrote. Same trust boundary as `sudo` or `ssh` password prompts.
+- The `g` wrapper reads the password from Keychain on each invocation; Claude doesn't need to know it.
 
 ### Step 3 — Run the Actual Request
 

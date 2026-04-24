@@ -25,24 +25,29 @@
 
 ## 配置
 
-当你对 Claude 说"列出 ESXi 上的所有虚拟机"而还没配置过时：
+你对 Claude 说"列出 ESXi 上所有虚拟机"（还没配置过时）的流程拆分：
 
-1. Claude 跑 `scripts/preflight.sh` 检测缺什么
-2. Claude 在聊天里问你**非敏感字段**：地址、用户名、证书类型、datacenter
-3. Claude 输出一段**可直接复制粘贴的命令块**，让你在自己的终端里跑。命令分三部分：
-   - 缺 `govc` 就装 `govc`
-   - 写配置到 `~/.config/esxi-skill/default.env`（只存非敏感值）
-   - 存密码 —— **你自己选方式**：
-     - **Keychain Access.app**（推荐，最安全，全 GUI）
-     - `security add-generic-password` CLI + 一个 `read -rs` 的静默提示
-4. 你自己跑命令。Claude 不执行、也不接触密码
-5. 跟 Claude 说"好了"，Claude 重新跑 preflight，然后用 `scripts/g` 包装器执行你的原请求
+| 步骤 | 谁来做 | 说明 |
+|---|---|---|
+| 1. 装 `govc` | **Claude 自动跑** | `brew install govc`（Linux 用 GitHub tarball） |
+| 2. 写配置文件 | **Claude 自动跑** | 非敏感字段（地址/用户名/证书/dc）写到 `~/.config/esxi-skill/default.env` |
+| 3. 存密码 | **你自己跑** | 在你自己的终端里用 OS 原生 keychain CLI 或 GUI |
+
+你只需要告诉 Claude 4 个非敏感字段，它就把密码之前的步骤全自动做掉。然后**只把密码这一条命令**给你：
+
+```bash
+# macOS（推荐）—— security CLI 的原生提示模式
+security add-generic-password -a 'root' -s 'govc-<HOST>' -U -w
+```
+
+执行后会提示输入密码（不回显、要求再输一次确认）。密码**不会**经过 Claude，也不会出现在 Claude 写入的任何文件里。
+
+你回"好了"后，Claude 重跑 preflight，然后用 `scripts/g` 执行你的原请求。
 
 ### 🔐 安全设计
 
-- Claude 只提**建议**：它输出命令给你审、让你自己跑，而不是反过来
-- 凭据绝不经过 LLM、聊天记录、或任何 Claude 发起的进程
-- 密码只会进入：(a) macOS 原生 Keychain Access 的安全输入框，或 (b) 你自己敲的 `read -rs` 命令提示符
+- Claude 自动处理非敏感工作（节省打字），但把密码步骤交还给你 —— 凭据永远不经过 LLM、聊天记录、或 Claude 启动的任何进程
+- 密码只会进入：(a) `security` 自己的 TTY 交互提示（直接通过 C API 写入 Keychain，shell 完全不参与），或 (b) macOS Keychain Access.app 的原生安全输入框
 
 Linux / Windows 的对应命令（libsecret / Credential Manager）见 [references/setup-commands.md](references/setup-commands.md)。
 

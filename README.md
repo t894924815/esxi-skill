@@ -25,24 +25,29 @@ Clone this repository into your Claude Code skills directory (use the clone URL 
 
 ## Setup
 
-When you ask Claude something like *"list all VMs on my ESXi host"*, and nothing has been configured yet:
+When you ask Claude something like *"list all VMs on my ESXi host"*, and nothing has been configured yet, the split is:
 
-1. Claude runs `scripts/preflight.sh` to detect what's missing.
-2. Claude asks you (in chat) for **non-sensitive** fields only: host, username, cert type, datacenter.
-3. Claude outputs a **copy-pasteable command block** for you to run in your own terminal. The block has three parts:
-   - Install `govc` if missing
-   - Write config to `~/.config/esxi-skill/default.env` (non-sensitive values only)
-   - Store password — **you pick the method**:
-     - **Keychain Access.app** (recommended, most secure, fully GUI)
-     - `security add-generic-password` CLI with a silent `read -rs` prompt
-4. You run the commands. Claude never executes them and never sees your password.
-5. Tell Claude "done". Claude re-runs preflight, then executes your original request using the `scripts/g` wrapper.
+| Action | Who | Details |
+|---|---|---|
+| 1. Install `govc` | **Claude auto-runs** | `brew install govc` (or GitHub tarball on Linux) |
+| 2. Write config file | **Claude auto-runs** | non-sensitive values (host/user/cert/dc) into `~/.config/esxi-skill/default.env` |
+| 3. Store password | **You run** | in your own terminal, using native OS keychain CLI or GUI |
+
+So after you tell Claude the 4 non-sensitive fields, it does everything up to the password step automatically. It then hands you **one single command** for the password:
+
+```bash
+# macOS (recommended) — security CLI's native prompt mode
+security add-generic-password -a 'root' -s 'govc-<HOST>' -U -w
+```
+
+Running this prompts for the password (hidden, not echoed, asks to retype). The password never touches Claude or any file Claude wrote.
+
+After you confirm "done", Claude re-runs preflight and executes your original request using `scripts/g`.
 
 ### 🔐 Security design
 
-- Claude's role is **advisory**: it prints commands for you to review and run, not the other way around.
-- Credentials never pass through the LLM, chat log, or any process Claude started.
-- The password only enters either (a) macOS's native Keychain Access secure field, or (b) a `read -rs` shell prompt that you typed yourself.
+- Claude auto-handles non-sensitive work (saving you typing), but hands off the password step so credentials never flow through the LLM, chat log, or any process Claude started.
+- The password only enters either (a) `security`'s own TTY prompt (reads directly into Keychain via C API, no shell involvement), or (b) macOS Keychain Access.app's native secure field.
 
 For Linux / Windows equivalents (libsecret, Credential Manager), see [references/setup-commands.md](references/setup-commands.md).
 
