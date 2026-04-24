@@ -52,75 +52,6 @@ def cred_file_path(profile: str) -> Path:
     return config_dir() / f"{profile}.cred"
 
 
-# ─── Private venv (for `keyring` on Windows; no global pip install) ──────
-
-def data_dir() -> Path:
-    """Per-OS user-level data directory for esxi-skill private files (venv)."""
-    sysname = platform.system()
-    if sysname == "Windows":
-        base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    elif sysname == "Darwin":
-        base = str(Path.home() / "Library" / "Application Support")
-    else:
-        base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(base) / "esxi-skill"
-
-def _venv_dir() -> Path:
-    return data_dir() / "venv"
-
-def _venv_python() -> Path:
-    v = _venv_dir()
-    if platform.system() == "Windows":
-        return v / "Scripts" / "python.exe"
-    return v / "bin" / "python"
-
-def _venv_site_packages() -> Optional[Path]:
-    v = _venv_dir()
-    if not v.exists():
-        return None
-    # Unix: lib/pythonX.Y/site-packages   Windows: Lib/site-packages
-    cands = list(v.glob("lib/python*/site-packages")) + list(v.glob("Lib/site-packages"))
-    return cands[0] if cands else None
-
-def _try_import_keyring():
-    """Import `keyring` from the current env or from our private venv.
-    Returns the module or None. No global install is performed."""
-    try:
-        import keyring  # type: ignore
-        return keyring
-    except ImportError:
-        pass
-    sp = _venv_site_packages()
-    if sp is not None and str(sp) not in sys.path:
-        sys.path.insert(0, str(sp))
-        try:
-            import keyring  # type: ignore
-            return keyring
-        except ImportError:
-            pass
-    return None
-
-def ensure_keyring_venv() -> Path:
-    """Create a private venv in data_dir() and pip-install `keyring` into it.
-    Returns the venv path. Does NOT touch any global site-packages."""
-    import venv as stdlib_venv  # local import to keep cold-start light
-    vd = _venv_dir()
-    if _try_import_keyring() is not None:
-        return vd  # already usable
-    vd.parent.mkdir(parents=True, exist_ok=True)
-    if not vd.exists():
-        print(f"[setup] creating private venv at {vd}", file=sys.stderr)
-        stdlib_venv.create(vd, with_pip=True, clear=False)
-    py = _venv_python()
-    if not py.exists():
-        raise RuntimeError(f"venv python not found at {py}")
-    print("[setup] installing keyring into private venv (no global install)…", file=sys.stderr)
-    subprocess.check_call(
-        [str(py), "-m", "pip", "install", "--quiet", "--disable-pip-version-check", "keyring"]
-    )
-    return vd
-
-
 def load_config(profile: str) -> Optional[dict]:
     p = config_path(profile)
     if not p.exists():
@@ -160,28 +91,21 @@ def get_password(service: str, account: str, profile: str = "default") -> Option
             return r.stdout.rstrip("\n")
         return None
     elif sysname == "Linux":
-        # Prefer libsecret
+        # libsecret only. No plaintext-file fallback by design: if the user has
+        # no libsecret, they should install libsecret-tools or use GOVC_PASSWORD
+        # env var (see cmd_g). Refusing to fall back to chmod-600 plaintext keeps
+        # the skill from silently writing plaintext to disk.
         if shutil.which("secret-tool"):
             r = _run(["secret-tool", "lookup", "service", service, "account", account])
             if r.returncode == 0 and r.stdout:
-                return r.stdout  # secret-tool does not add trailing newline
-        # Fallback to file
-        cf = cred_file_path(profile)
-        if cf.exists():
-            return cf.read_text()
+                return r.stdout  # secret-tool does not add a trailing newline
         return None
     elif sysname == "Windows":
-        # Prefer `keyring` (Windows Credential Manager via DPAPI). keyring is
-        # installed into a private venv under %LOCALAPPDATA%\esxi-skill\venv —
-        # no global pip install. See ensure_keyring_venv().
-        kr = _try_import_keyring()
-        if kr is not None:
-            try:
-                return kr.get_password(service, account)
-            except Exception:
-                pass  # fall through to file fallback
-        # Fallback: DPAPI-encrypted hex file. PowerShell's `ConvertFrom-SecureString`
-        # (no -Key) binds ciphertext to current user + current machine.
+        # DPAPI-encrypted hex file. Produced by PowerShell's `ConvertFrom-SecureString`
+        # (no -Key) which binds the ciphertext to current user + current machine.
+        # We decrypt by subprocessing PowerShell and reversing: ConvertTo-SecureString
+        # → SecureStringToBSTR → PtrToStringBSTR, zeroing the BSTR in `finally` to
+        # minimize plaintext lifetime.
         cf = cred_file_path(profile)
         if not cf.exists():
             return None
@@ -199,106 +123,17 @@ def get_password(service: str, account: str, profile: str = "default") -> Option
     else:
         raise KeychainError(f"Unsupported platform: {sysname}")
 
-def set_password(service: str, account: str, password: str, profile: str = "default") -> None:
-    """Store password in the OS-appropriate keychain backend.
-    Used by `set-password` subcommand; NOT recommended for macOS where the
-    native `security -U -w` interactive prompt is stronger (no Python
-    intermediary). On Linux+libsecret, `secret-tool store` is also stronger.
-    The primary value of this helper is uniform UX on Windows and Linux-no-
-    libsecret, where native CLI alternatives are awkward."""
-    sysname = platform.system()
-    if sysname == "Darwin":
-        r = _run(["security", "add-generic-password",
-                  "-a", account, "-s", service, "-U", "-w", password])
-        if r.returncode != 0:
-            raise KeychainError(f"security add-generic-password failed: {r.stderr.strip()}")
-    elif sysname == "Linux":
-        if shutil.which("secret-tool"):
-            r = _run(
-                ["secret-tool", "store", "--label", f"govc: {account} @ {service}",
-                 "service", service, "account", account],
-                input_=password,
-            )
-            if r.returncode != 0:
-                raise KeychainError(f"secret-tool store failed: {r.stderr.strip()}")
-        else:
-            cf = cred_file_path(profile)
-            cf.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                cf.parent.chmod(0o700)
-            except OSError:
-                pass
-            # Write with restrictive umask so creation permissions are tight
-            old_umask = os.umask(0o077)
-            try:
-                cf.write_text(password)
-                cf.chmod(0o600)
-            finally:
-                os.umask(old_umask)
-    elif sysname == "Windows":
-        # Prefer keyring → Windows Credential Manager. If keyring isn't installed
-        # yet, create the private venv and install it now.
-        kr = _try_import_keyring()
-        if kr is None:
-            try:
-                ensure_keyring_venv()
-                kr = _try_import_keyring()
-            except Exception as e:
-                print(
-                    f"[warn] failed to provision keyring venv: {e}\n"
-                    "[warn] falling back to DPAPI-encrypted file.",
-                    file=sys.stderr,
-                )
-        if kr is not None:
-            kr.set_password(service, account, password)
-            return
-        # Fallback: DPAPI-encrypt via PowerShell, write hex to file (stdin feeds
-        # the plaintext so it never lands in argv).
-        cf = cred_file_path(profile)
-        cf.parent.mkdir(parents=True, exist_ok=True)
-        ps = (
-            "$p = [Console]::In.ReadLine(); "
-            "$sec = ConvertTo-SecureString -String $p -AsPlainText -Force; "
-            "ConvertFrom-SecureString -SecureString $sec"
-        )
-        r = _run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            input_=password,
-        )
-        if r.returncode != 0:
-            raise KeychainError(
-                f"DPAPI encryption via PowerShell failed: {r.stderr.strip()}"
-            )
-        cf.write_text(r.stdout.rstrip("\r\n"))
-        user = os.environ.get("USERNAME") or os.environ.get("USER")
-        if user and shutil.which("icacls"):
-            subprocess.run(
-                ["icacls", str(cf), "/inheritance:r", "/grant:r", f"{user}:(R,W)"],
-                capture_output=True,
-            )
-    else:
-        raise KeychainError(f"Unsupported platform: {sysname}")
-
-
 def keychain_has_entry(service: str, account: str, profile: str = "default") -> bool:
     sysname = platform.system()
     if sysname == "Darwin":
         r = _run(["security", "find-generic-password", "-a", account, "-s", service])
         return r.returncode == 0
     elif sysname == "Linux":
-        if shutil.which("secret-tool"):
-            r = _run(["secret-tool", "lookup", "service", service, "account", account])
-            if r.returncode == 0 and r.stdout:
-                return True
-        return cred_file_path(profile).exists()
+        if not shutil.which("secret-tool"):
+            return False
+        r = _run(["secret-tool", "lookup", "service", service, "account", account])
+        return r.returncode == 0 and bool(r.stdout)
     elif sysname == "Windows":
-        kr = _try_import_keyring()
-        if kr is not None:
-            try:
-                if kr.get_password(service, account) is not None:
-                    return True
-            except Exception:
-                pass
         return cred_file_path(profile).exists()
     else:
         return False
@@ -388,82 +223,84 @@ def install_govc() -> None:
 # ─── Password command hint (per-OS) ───────────────────────────────────────
 
 def password_command_hint(service: str, account: str, profile: str) -> str:
-    """Return the platform-appropriate command for the USER to run themselves
-    to store the password. Never executed by this module.
+    """Return the platform-appropriate command for the USER to run in their own
+    terminal. This module never runs the command — its only purpose is to print
+    it so the user can paste it.
 
-    Policy:
-      - Default recommendation on every platform is a single line:
-          python3 <esxi.py> set-password
-        This uses `getpass` for hidden TTY input, then routes the password
-        to the OS-appropriate backend inside esxi.py.
-      - For the paranoid: on macOS we also document the direct `security`
-        interactive command (password never enters Python); on Linux we also
-        document `secret-tool store` (password goes through keyring daemon).
+    Design:
+      - Print the ONE command appropriate for the current OS. Do not show
+        commands for other platforms (users copy-paste the wrong one otherwise).
+      - Every command uses OS-native tools, no Python intermediary. Password
+        enters an OS-native secure-input primitive and goes straight into the
+        OS keychain or a DPAPI-encrypted file — it never touches esxi.py.
     """
     sysname = platform.system()
-    py_cmd = f"python3 {Path(__file__)}"
-    if profile != "default":
-        py_cmd += f" --profile {profile}"
-
-    primary = (
-        "Run ONE command in your own terminal:\n"
-        "\n"
-        f"  {py_cmd} set-password\n"
-        "\n"
-        "  (hidden prompt, asks to retype; stores to the OS-appropriate\n"
-        "   keychain automatically.)\n"
-    )
 
     if sysname == "Darwin":
-        return primary + (
-            "\n"
-            "Or (most secure — password never enters Python):\n"
+        return (
+            "Run this in your own terminal:\n"
             "\n"
             f"  security add-generic-password -a {account!r} -s {service!r} -U -w\n"
             "\n"
-            "  (security prompts for the password itself; `man security` confirms\n"
-            "   this is the intended use of trailing `-w` without a value.)\n"
+            "`security` prompts for the password itself (hidden, asks to retype).\n"
+            "`man security`: 'Specify -w as the last option to be prompted.'\n"
+            "The password goes from the terminal TTY straight into the macOS\n"
+            "login Keychain via security's C API. esxi.py never sees it.\n"
         )
-    elif sysname == "Linux" and shutil.which("secret-tool"):
-        return primary + (
+
+    if sysname == "Linux":
+        if shutil.which("secret-tool"):
+            return (
+                "Run this in your own terminal:\n"
+                "\n"
+                f"  secret-tool store --label={f'govc: {account} @ {service}'!r} \\\n"
+                f"    service {service!r} account {account!r}\n"
+                "\n"
+                "secret-tool prompts via your keyring daemon (GNOME Keyring /\n"
+                "KDE Wallet / other Secret Service). Password never touches the\n"
+                "shell or esxi.py.\n"
+            )
+        return (
+            "⚠  No libsecret-tools installed. esxi-skill does NOT fall back to\n"
+            "   a chmod-600 plaintext file by design.\n"
             "\n"
-            "Or (libsecret native prompt — keyring daemon handles input):\n"
+            "Pick one:\n"
             "\n"
-            f"  secret-tool store --label={f'govc: {account} @ {service}'!r} \\\n"
-            f"    service {service!r} account {account!r}\n"
+            "   (a) Install libsecret-tools and re-run setup:\n"
+            "       apt install libsecret-tools     # Debian/Ubuntu\n"
+            "       dnf install libsecret           # Fedora/RHEL\n"
+            "       apk add libsecret               # Alpine\n"
+            "\n"
+            "   (b) For one-off / CI use: export GOVC_PASSWORD in your shell\n"
+            "       before running `esxi.py g …`. Nothing is persisted to disk.\n"
         )
-    elif sysname == "Windows":
-        vd = _venv_dir()
+
+    if sysname == "Windows":
         cf = cred_file_path(profile)
-        kr_ok = _try_import_keyring() is not None
-        if kr_ok:
-            storage_line = (
-                f"ⓘ Storage: Windows Credential Manager via `keyring`\n"
-                f"  (private venv at {vd}, NOT a global pip install).\n"
-                f"  Manage entries visually in `credwiz` or `cmdkey /list`.\n"
-            )
-        else:
-            storage_line = (
-                f"ⓘ Storage: DPAPI-encrypted file at {cf} (NTFS ACL → current user).\n"
-                f"  To upgrade to Windows Credential Manager, re-run:\n"
-                f"    {py_cmd} setup --host <H> --user <U>\n"
-                f"  which provisions a private keyring venv (no global pip install).\n"
-            )
-        return primary + (
+        return (
+            "Run this block in PowerShell in your own terminal:\n"
             "\n"
-            f"{storage_line}"
-            "\n"
-            "Alternative (no Python at all — direct DPAPI file via PowerShell):\n"
-            "\n"
-            f"  New-Item -ItemType Directory -Force -Path (Split-Path -Parent '{cf}') | Out-Null\n"
+            f"  $cf = '{cf}'\n"
+            "  New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cf) | Out-Null\n"
             "  Read-Host -AsSecureString -Prompt 'ESXi password' |\n"
             "    ConvertFrom-SecureString |\n"
-            f"    Set-Content -LiteralPath '{cf}' -NoNewline\n"
-            f"  icacls '{cf}' /inheritance:r /grant:r \"$($env:USERNAME):(R,W)\"\n"
+            "    Set-Content -LiteralPath $cf -NoNewline\n"
+            "  icacls $cf /inheritance:r /grant:r \"$($env:USERNAME):(R,W)\"\n"
+            "\n"
+            "How it works:\n"
+            "  • Read-Host -AsSecureString    → password hidden; stored as\n"
+            "                                   SecureString in PowerShell memory.\n"
+            "  • ConvertFrom-SecureString     → DPAPI-encrypts to a hex string,\n"
+            "    (no -Key)                      bound to current user + machine.\n"
+            "  • Set-Content                  → writes the ciphertext to disk.\n"
+            "  Plaintext never hits disk. Only the same Windows user on the same\n"
+            "  machine can decrypt (via ConvertTo-SecureString).\n"
         )
-    else:
-        # Linux-no-libsecret and any other POSIX
-        return primary
+
+    return (
+        f"esxi-skill: unsupported platform {sysname!r}. "
+        f"Install manually or contribute an OS-native password-storage recipe.\n"
+    )
 
 
 
@@ -564,18 +401,22 @@ def cmd_setup(args: argparse.Namespace) -> int:
     p = save_config(profile, cfg)
     print(f"[setup] config written: {p}", file=sys.stderr)
 
-    # 2.5. On Windows: provision a private venv with `keyring` so we can write
-    # into Windows Credential Manager (DPAPI-backed). No global pip install.
-    if platform.system() == "Windows" and not getattr(args, "no_keyring", False):
-        try:
-            ensure_keyring_venv()
-            print("[setup] keyring available in private venv", file=sys.stderr)
-        except Exception as e:
-            print(
-                f"[warn] could not provision keyring venv: {e}\n"
-                "[warn] will fall back to DPAPI-encrypted file if needed.",
-                file=sys.stderr,
-            )
+    # 2.5. On Linux: warn (but do not fail) if libsecret is missing. The user
+    # can still finish setup and use the skill via `GOVC_PASSWORD` env var for
+    # ad-hoc runs, but they should install libsecret-tools for persistent
+    # keychain-backed storage.
+    if platform.system() == "Linux" and not shutil.which("secret-tool"):
+        print(
+            "\n[warn] libsecret-tools not found. No persistent keychain backend is\n"
+            "[warn] available on this system. Either install it:\n"
+            "[warn]   apt install libsecret-tools    # Debian/Ubuntu\n"
+            "[warn]   dnf install libsecret          # Fedora/RHEL\n"
+            "[warn] …and re-run setup, OR set GOVC_PASSWORD in your shell env\n"
+            "[warn] each session (`esxi.py g` will pick it up and skip the keychain\n"
+            "[warn] lookup). esxi-skill deliberately does NOT fall back to a\n"
+            "[warn] plaintext chmod-600 file.",
+            file=sys.stderr,
+        )
 
     # 3. Print password command for USER to run themselves
     print("")
@@ -587,58 +428,6 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print("After you've stored the password, run:")
     print(f"  python3 {Path(__file__)} preflight")
     print("to verify, then ask your AI assistant to run the original request.")
-    return 0
-
-
-# ─── set-password ─────────────────────────────────────────────────────────
-
-def cmd_set_password(args: argparse.Namespace) -> int:
-    """Prompt for password (TTY-hidden via getpass) and store it."""
-    import getpass
-
-    profile = args.profile
-    cfg = load_config(profile)
-    if cfg is None:
-        print(
-            f"esxi-skill: no config for profile '{profile}'. Run setup first:\n"
-            f"  python3 {Path(__file__)} setup --host … --user … …",
-            file=sys.stderr,
-        )
-        return 2
-
-    service = cfg.get("cred_service") or f"govc-{cfg['host']}"
-    account = cfg["username"]
-    host = cfg["host"]
-
-    try:
-        pw = getpass.getpass(f"ESXi password for {account}@{host}: ")
-    except (KeyboardInterrupt, EOFError):
-        print("\naborted", file=sys.stderr)
-        return 1
-    if not pw:
-        print("empty password — aborted", file=sys.stderr)
-        return 1
-    try:
-        confirm = getpass.getpass("Retype to confirm: ")
-    except (KeyboardInterrupt, EOFError):
-        print("\naborted", file=sys.stderr)
-        return 1
-    if confirm != pw:
-        print("passwords do not match", file=sys.stderr)
-        return 1
-
-    try:
-        set_password(service, account, pw, profile)
-    except KeychainError as e:
-        print(f"esxi-skill: {e}", file=sys.stderr)
-        return 3
-    finally:
-        # Best-effort clear (Python strings are immutable so this doesn't
-        # purge memory; we rely on GC. Still, drop references promptly.)
-        pw = ""
-        confirm = ""
-
-    print(f"✓ password stored (service={service} account={account})")
     return 0
 
 
@@ -681,13 +470,20 @@ def cmd_g(args: argparse.Namespace) -> int:
         return 4
 
     service = cfg.get("cred_service") or f"govc-{cfg['host']}"
-    pw = get_password(service, cfg["username"], profile)
+    # Env-var bypass: users without a usable keychain (CI, containers, Linux
+    # without libsecret) can set GOVC_PASSWORD in their shell; we use it as-is
+    # and skip the keychain lookup. Nothing is persisted.
+    pw = os.environ.get("GOVC_PASSWORD") or get_password(service, cfg["username"], profile)
     if not pw:
         print(
-            f"esxi-skill: password not in keychain (service={service} account={cfg['username']})",
+            f"esxi-skill: no credential found (service={service} account={cfg['username']})",
             file=sys.stderr,
         )
-        print(f"  Re-run setup and complete the password step.", file=sys.stderr)
+        print(
+            "  Either store a password via the command printed by `setup`, or\n"
+            "  set GOVC_PASSWORD in your shell env for one-off use.",
+            file=sys.stderr,
+        )
         return 3
 
     env = build_govc_env(cfg, pw)
@@ -715,13 +511,7 @@ def main(argv: list[str]) -> int:
     sp_setup.add_argument("--user", default="root")
     sp_setup.add_argument("--insecure", type=int, default=1, help="1 = skip TLS verify")
     sp_setup.add_argument("--datacenter", default="ha-datacenter")
-    sp_setup.add_argument("--no-keyring", action="store_true",
-                          help="(Windows) skip provisioning the private keyring venv; use DPAPI file fallback")
     sp_setup.set_defaults(func=cmd_setup)
-
-    sp_sp = sub.add_parser("set-password",
-                           help="prompt for password (hidden) and store in keychain")
-    sp_sp.set_defaults(func=cmd_set_password)
 
     sp_g = sub.add_parser("g", help="govc wrapper (loads creds, execs govc)")
     sp_g.add_argument("govc_args", nargs=argparse.REMAINDER,

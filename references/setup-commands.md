@@ -1,116 +1,95 @@
 # Password-Storage Command Reference (by OS)
 
-This file documents the **password-step commands** that `esxi.py setup` prints to the user. All install/config work is done automatically by `esxi.py` — only the password storage is manual.
+`esxi.py setup` prints **one** of the following blocks to the user — whichever matches the current OS. The user pastes it into their own terminal. `esxi.py` never executes it and never sees the password.
 
-Replace `<HOST>`, `<USER>` with the values you passed to `esxi.py setup`.
+Replace `<USER>` / `<HOST>` with the values you passed to `esxi.py setup`.
 
 ---
 
 ## macOS
 
-Stored in macOS login Keychain.
-
-**Recommended** — `security` CLI native prompt (interactive, no shell exposure):
+Stored in login Keychain.
 
 ```bash
 security add-generic-password -a '<USER>' -s 'govc-<HOST>' -U -w
 ```
 
-Placing `-w` as the last arg without a value makes `security` prompt interactively (hidden input, asks to retype). Documented in `man security`: "Specify -w as the last option to be prompted."
+Trailing `-w` with no value makes `security` prompt interactively (hidden input, asks to retype). Documented in `man security`: *"Specify -w as the last option to be prompted."* The password flows from TTY directly into Keychain via `security`'s C API — it never touches the shell, never enters Python, never appears in argv.
 
-**Alternative** — Keychain Access.app GUI:
-
-```bash
-open -a "Keychain Access"
-```
-
-`File ▸ New Password Item…`:
-- Keychain Item Name: `govc-<HOST>`
-- Account Name: `<USER>`
-- Password: (type in the native secure field)
+`esxi.py g` reads it back with `security find-generic-password -a <USER> -s govc-<HOST> -w`.
 
 ---
 
-## Linux — with libsecret (preferred)
+## Linux — with libsecret (`secret-tool`)
 
 Stored in GNOME Keyring / KDE Wallet / other Secret Service implementation.
-
-Prerequisite: `libsecret-tools`:
-- `apt install libsecret-tools` (Debian/Ubuntu)
-- `dnf install libsecret` (Fedora/RHEL)
 
 ```bash
 secret-tool store --label='govc: <USER> @ <HOST>' \
   service 'govc-<HOST>' account '<USER>'
 ```
 
-`secret-tool` prompts via the keyring daemon's own agent. Password never touches the shell.
+Prompts via the keyring daemon itself (DBus IPC to the daemon); password never touches the shell. `esxi.py g` reads it back with `secret-tool lookup service govc-<HOST> account <USER>`.
 
-**GUI alternatives**:
-- GNOME: open "Passwords and Keys" (`seahorse`) → Add Password
-- KDE: open "KDE Wallet Manager" → Add item
-- Attributes: `service=govc-<HOST>`, `account=<USER>`
+Prerequisite: `libsecret-tools` package:
+- `apt install libsecret-tools` — Debian/Ubuntu
+- `dnf install libsecret` — Fedora/RHEL
+- `apk add libsecret` — Alpine
 
 ---
 
-## Linux — no libsecret (file fallback)
+## Linux — without libsecret
 
-Stored in `~/.config/esxi-skill/<profile>.cred` (chmod 600).
+**esxi.py deliberately refuses to configure a keychain backend in this case.** We do NOT fall back to a chmod-600 plaintext file, because its UX looks almost identical to the Windows DPAPI block below, but its security is qualitatively worse (plaintext on disk vs. ciphertext on disk).
 
+**Options**:
+
+### (a) Install libsecret-tools and re-run setup (recommended)
+See the package list above. Then re-run `python3 .../esxi.py setup --host ... --user ...`.
+
+### (b) One-off / CI use: `GOVC_PASSWORD` env var
 ```bash
-umask 077
-read -rs -p 'ESXi password: ' PW && echo
-printf '%s' "$PW" > ~/.config/esxi-skill/default.cred
-chmod 600 ~/.config/esxi-skill/default.cred
-unset PW
+export GOVC_PASSWORD='...'
+python3 .../esxi.py g ls vm
 ```
 
-For stronger security, install `libsecret-tools` and use the libsecret path above.
+`esxi.py g` checks `$GOVC_PASSWORD` **before** the keychain lookup. The password lives only in that shell's env; nothing is persisted. Suitable for CI secrets, container `-e GOVC_PASSWORD=...`, short interactive sessions.
 
 ---
 
 ## Windows
 
-**Primary** — Windows Credential Manager via the `keyring` Python package. `esxi.py setup` on Windows **automatically provisions a private venv** at `%LOCALAPPDATA%\esxi-skill\venv\` and installs `keyring` into it. **No global pip install, no `pip install --user`.** Credential entries show up in Windows's "Credential Manager" control panel (Generic Credentials) and are DPAPI-encrypted under the hood.
-
-After `esxi.py setup` finishes, it prints a uniform password command:
+Stored as a DPAPI-encrypted hex string in `%APPDATA%\esxi-skill\<profile>.cred`, with NTFS ACL restricted to the current user.
 
 ```powershell
-python .../esxi.py set-password
-```
-
-which prompts for the password (hidden) and writes it into Credential Manager via `keyring`.
-
-**Fallback** — if the keyring venv can't be provisioned (offline, pip blocked, corporate policy, etc.), `esxi.py` uses a DPAPI-encrypted hex file at `%APPDATA%\esxi-skill\<profile>.cred`. Password is bound to the current Windows user + current machine. To pre-populate this file without running Python:
-
-```powershell
-New-Item -ItemType Directory -Force -Path (Split-Path -Parent "$env:APPDATA\esxi-skill\default.cred") | Out-Null
-
+$cf = '%APPDATA%\esxi-skill\default.cred'   # actual path printed by setup
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cf) | Out-Null
 Read-Host -AsSecureString -Prompt 'ESXi password' |
   ConvertFrom-SecureString |
-  Set-Content -LiteralPath "$env:APPDATA\esxi-skill\default.cred" -NoNewline
-
-# Defense-in-depth: restrict NTFS ACL to the current user.
-icacls "$env:APPDATA\esxi-skill\default.cred" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
+  Set-Content -LiteralPath $cf -NoNewline
+icacls $cf /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
 ```
 
-**How it's secure**: `ConvertFrom-SecureString` (no `-Key`) encrypts under DPAPI with the current user's master key. Another Windows user on the same machine — or the same user on a different machine — cannot decrypt. Same cryptographic primitive that Credential Manager uses internally.
+**How it's secure**:
+- `Read-Host -AsSecureString` hides input; stores result as `SecureString` (obfuscated in PowerShell memory).
+- `ConvertFrom-SecureString` (no `-Key`) encrypts under **DPAPI** (Data Protection API), binding ciphertext to the current Windows user + current machine.
+- `Set-Content` writes the hex ciphertext to disk. **Plaintext never hits disk.**
+- Another user on the same machine — even an administrator not running as you — cannot decrypt without your DPAPI master key. Same user on a different machine also cannot decrypt (no roaming).
+- `icacls` is defense-in-depth: reduces file visibility below what DPAPI already guarantees.
 
-**To skip the keyring auto-install** (e.g. in a restricted environment):
-```bash
-python .../esxi.py setup --host ... --user ... --no-keyring
-```
+`esxi.py g` reads it back by subprocessing PowerShell: `ConvertTo-SecureString $hex` → `[Runtime.InteropServices.Marshal]::SecureStringToBSTR` → `PtrToStringBSTR`, then zeros the BSTR in `finally`.
+
+### Future work — Windows Credential Manager
+
+DPAPI file and Windows Credential Manager share the same cryptographic primitive (DPAPI). The file approach's only real downside vs. Credential Manager is lack of GUI visibility: you can't see the entry in the "Credential Manager" control panel.
+
+If GUI management becomes important, the upgrade path is to extend `esxi.py` to call `CredWrite` / `CredRead` directly via stdlib `ctypes`. This keeps the "no pip dependencies" rule intact. We chose not to do this yet because the file approach is simpler, verifiable, and cryptographically equivalent.
 
 ---
 
 ## Updating an Existing Password
 
-Same commands as initial setup:
-- macOS `security … -U …` updates in place (the `-U` flag).
-- `secret-tool store` overwrites entries with the same attributes.
-- File-based: just re-run the `read -rs` / `Read-Host` block.
-
-No need to re-run `esxi.py setup` if only the password changed.
+Same commands. `security … -U …` updates in place, `secret-tool store` overwrites entries with matching attributes, the PowerShell block overwrites the file. No need to rerun `esxi.py setup` for a password change.
 
 ---
 

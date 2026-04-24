@@ -15,7 +15,8 @@ The implementation is **a single Python 3 module** (`esxi.py`). Python 3.7+ is r
 |---|---|---|---|
 | **macOS** | Primary, tested | `brew install govc` (auto) | login Keychain via `security` |
 | **Linux** | Best-effort (untested end-to-end) | GitHub tarball to `/usr/local/bin` or `~/.local/bin` (auto) | libsecret (`secret-tool`) if installed; else chmod-600 cred file |
-| **Windows** | Supported | Manual (`winget` / `scoop` / `choco`) | **Windows Credential Manager** via `keyring` (installed into a private venv at `%LOCALAPPDATA%\esxi-skill\venv`, **never global pip**); falls back to DPAPI-encrypted hex file if the venv can't be provisioned |
+| **Linux** (no libsecret) | **Not supported** by default | same | esxi-skill deliberately refuses to fall back to a plaintext file. Install libsecret-tools, OR set `GOVC_PASSWORD` env var per session |
+| **Windows** | Supported | Manual (`winget` / `scoop` / `choco`) | **DPAPI-encrypted hex file** at `%APPDATA%\esxi-skill\<profile>.cred`, written by PowerShell's native `Read-Host -AsSecureString \| ConvertFrom-SecureString`. Plaintext never hits disk; only the same Windows user on the same machine can decrypt. See `references/setup-commands.md` for future Credential Manager work. |
 
 ---
 
@@ -105,20 +106,24 @@ Only the password step is handed back to the user. Everything else is handled by
 
 7. **Re-run preflight**. If `ready: true`, proceed to Step 3 (run the actual user request). If still failing, show the JSON and help debug.
 
-**Password commands per OS** (handled by `esxi.py setup`, but documented here for reference):
+**Password command printed by `esxi.py setup` (one per OS)**:
 
-| OS | Primary command printed to user |
+| OS | Command |
 |---|---|
-| **All platforms (uniform)** | `python3 .../esxi.py set-password` — hidden prompt via `getpass`, stores to OS-appropriate backend |
-| **macOS** (alternative, most secure) | `security add-generic-password -a <USER> -s govc-<HOST> -U -w` (security's own interactive prompt; password never enters Python) |
-| **Linux + libsecret** (alternative) | `secret-tool store --label=… service govc-<HOST> account <USER>` |
+| **macOS** | `security add-generic-password -a <USER> -s govc-<HOST> -U -w` — security's own interactive prompt; password flows TTY → security C API → Keychain. Never enters Python. |
+| **Linux + libsecret** | `secret-tool store --label='…' service govc-<HOST> account <USER>` — prompts via keyring daemon (GNOME Keyring / KDE Wallet / etc.). |
+| **Linux no libsecret** | esxi.py refuses to configure a credential store. User must install `libsecret-tools`, or set `GOVC_PASSWORD` env var per session. |
+| **Windows** | PowerShell block: `Read-Host -AsSecureString \| ConvertFrom-SecureString \| Set-Content <cred>` + `icacls` ACL. Stores DPAPI-encrypted hex (not plaintext). |
 
-The `set-password` uniform path is recommended unless the user has specific reason to use the native alternative (mostly paranoia about Python memory briefly holding the password).
+**Critical design decision**: `esxi.py` is a **read-only credential consumer**. It never writes passwords. The commands it prints to the user are OS-native CLIs the user can audit in seconds. This avoids the two failure modes a `set-password` subcommand would have:
+1. **Path portability** — `python3 <absolute-path>/esxi.py set-password` breaks when the skill is moved or reinstalled elsewhere.
+2. **Trust** — users shouldn't have to audit an LLM-recommended Python script before typing their password into it.
 
 **Why this split**:
 - **Auto for non-secrets** = less friction. Typing `brew install govc` and a multi-line heredoc by hand would annoy users for no security gain.
-- **User-manual for password** = the password never passes through Claude's chat log, Bash tool calls, or any file Claude wrote. Same trust boundary as `sudo` or `ssh` password prompts.
-- The `g` wrapper reads the password from Keychain on each invocation; Claude doesn't need to know it.
+- **User-manual for password via native OS CLI** = the password never passes through Claude's chat log, Bash tool calls, Python process memory, or any file esxi.py wrote.
+- The `g` wrapper reads the password from the OS keychain on each invocation; Claude doesn't need to know it.
+- For CI / containers / Linux without libsecret: `GOVC_PASSWORD` env var is the escape hatch. `esxi.py g` checks `$GOVC_PASSWORD` before the keychain lookup.
 
 ### Step 3 — Run the Actual Request
 

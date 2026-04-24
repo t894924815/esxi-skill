@@ -45,7 +45,8 @@
 - **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w`（原生交互提示）
 - **Linux**（有 libsecret）: `secret-tool store …`
 - **Linux**（无 libsecret）: `read -rs` → `chmod 600` 文件
-- **Windows**: `keyring`（Windows Credential Manager）装在独立 venv `%LOCALAPPDATA%\esxi-skill\venv\` 里 —— **不做全局 pip 安装**。provision 失败时回退到 DPAPI 加密文件。
+- **Linux**（无 libsecret）：**默认不支持** —— 让用户装 `libsecret-tools`，或用 `GOVC_PASSWORD` env var 做 CI。**故意不**回退到 chmod-600 明文文件。
+- **Windows**: PowerShell `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content` → DPAPI 加密 hex 文件（`%APPDATA%\esxi-skill\<profile>.cred`）。明文不落盘。
 
 ### 🔐 安全设计
 
