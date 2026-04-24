@@ -223,6 +223,48 @@ This reuses a single auth session across calls.
 
 ## Output Parsing Pitfalls
 
+### `jq: parse error: Invalid string: control characters from U+0000 through U+001F must be escaped`
+
+**Cause**: you captured the JSON into a bash variable, then `echo`'d it into `jq`:
+```bash
+OUT=$(govc ls -json vm)
+echo "$OUT" | jq ...   # ❌ breaks on large/complex JSON
+```
+
+On macOS, bash's builtin `echo` **silently interprets backslash sequences** in the variable. If the JSON contains `\\`, `\t`, `\r` inside string values (common in annotations, descriptions, paths), `echo` eats them and `jq` sees malformed JSON.
+
+**Fix**: always pipe directly.
+```bash
+govc ls -json vm | jq ...   # ✅
+```
+
+If you really need to reuse the output, write it to a temp file:
+```bash
+govc ls -json vm > /tmp/vms.json
+jq ... /tmp/vms.json
+```
+
+Or use `printf '%s'` instead of `echo`:
+```bash
+OUT=$(govc ls -json vm)
+printf '%s' "$OUT" | jq ...   # ✅ printf doesn't interpret
+```
+
+### camelCase vs PascalCase
+
+govc **0.30+** (Nov 2022) changed `-json` output from Go-style PascalCase to JSON-style camelCase. Old examples on the internet may use `.Name`, `.Runtime.PowerState`, `.Summary.Config.MemorySizeMB` — update to lowercase:
+
+| Old (pre-0.30)            | Current (0.30+)         |
+|---------------------------|-------------------------|
+| `.Name`                   | `.name`                 |
+| `.Runtime.PowerState`     | `.runtime.powerState`   |
+| `.Config.Hardware.NumCPU` | `.config.hardware.numCPU` |
+| `.Summary.Config.MemorySizeMB` | `.summary.config.memorySizeMB` |
+| `.Guest.IpAddress`        | `.guest.ipAddress`      |
+| `.Guest.ToolsRunningStatus` | `.guest.toolsRunningStatus` |
+
+If upgrading from an older govc and jq suddenly returns empty/null, this is why.
+
 ### Dates
 
 govc returns ISO-8601 with timezone. Use jq:

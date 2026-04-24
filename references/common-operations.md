@@ -291,12 +291,19 @@ tar -cf /backup/web-01-$(date +%Y%m%d).ova /tmp/web-01
 
 ## 12. Query Patterns (jq)
 
+> **govc 0.30+** returns **camelCase** JSON keys (not PascalCase). Always **pipe directly** — don't `OUT=$(...); echo "$OUT" | jq` because bash's `echo` mangles backslashes in the JSON.
+
 ```bash
-# All VMs → name + power state
-govc ls -json vm | jq -r '.elements[].Object | "\(.Name)\t\(.Runtime.PowerState)"'
+# All VMs → name + power state + IP (if guest tools report it)
+govc ls -json vm | jq -r '.elements[].Object | "\(.name)\t\(.runtime.powerState)\t\(.guest.ipAddress // "-")"'
+
+# Pretty table
+govc ls -json vm \
+  | jq -r '["NAME","POWER","IP"],(.elements[].Object|[.name,.runtime.powerState,(.guest.ipAddress // "-")])|@tsv' \
+  | column -t -s $'\t'
 
 # Total allocated memory across all VMs (GB)
-govc ls -json vm | jq '[.elements[].Object.Summary.Config.MemorySizeMB] | add / 1024'
+govc ls -json vm | jq '[.elements[].Object.summary.config.memorySizeMB] | add / 1024'
 
 # Datastore free space
 govc datastore.info -json | jq '.datastores[] | {name: .name, free_gb: (.summary.freeSpace/1073741824 | floor)}'
@@ -304,14 +311,36 @@ govc datastore.info -json | jq '.datastores[] | {name: .name, free_gb: (.summary
 # VMs with VMware Tools not running
 govc ls -json vm | jq -r '
   .elements[].Object |
-  select(.Guest.ToolsRunningStatus != "guestToolsRunning") |
-  .Name
+  select(.guest.toolsRunningStatus != "guestToolsRunning") |
+  .name
 '
 
-# Hosts with DRS/HA disabled
+# Hosts in maintenance mode
 govc ls -json host | jq -r '
   .elements[].Object |
-  select(.Summary.Runtime.InMaintenanceMode == false) |
-  .Name
+  select(.summary.runtime.inMaintenanceMode == true) |
+  .name
+'
+```
+
+### Python fallback (when jq chokes)
+
+If `jq` reports a parse error despite the JSON being valid, it's almost always because the JSON was captured to a shell variable and echoed. Two robust alternatives:
+
+```bash
+# (a) Pipe directly to jq — usually fixes it
+govc ls -json vm | jq -r '.elements[].Object | "\(.name)\t\(.runtime.powerState)"'
+
+# (b) If you really need to capture, use a file, not a variable
+govc ls -json vm > /tmp/vms.json && jq -r '.elements[].Object.name' /tmp/vms.json
+
+# (c) Python — tolerates oddities jq doesn't
+govc ls -json vm | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for e in d["elements"]:
+    o = e["Object"]
+    ip = (o.get("guest") or {}).get("ipAddress") or "-"
+    print(f"{o[\"name\"]}\t{o[\"runtime\"][\"powerState\"]}\t{ip}")
 '
 ```

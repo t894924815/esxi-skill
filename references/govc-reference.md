@@ -183,10 +183,10 @@ host.service policy -host <name> TSM-SSH on
 host.portgroup.info -host <name>
 host.esxcli.run -host <name> network firewall ruleset list
 
-# Hardware
-host.info -k | jq '.hostSystems[0].hardware'
-host.esxcli.run -host <name> hardware platform get
-host.esxcli.run -host <name> storage core device list
+# Hardware (govc 0.30+ returns camelCase JSON keys)
+govc host.info -json | jq '.hostSystems[0].hardware'
+govc host.esxcli.run -host <name> hardware platform get
+govc host.esxcli.run -host <name> storage core device list
 ```
 
 ---

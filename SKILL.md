@@ -7,6 +7,14 @@ description: "VMware ESXi / vSphere management via govc CLI. Use when: managing 
 
 Manage VMware ESXi hosts and vCenter via `govc` — VMware's official Go CLI built on `govmomi`. Optimized for LLM-driven automation: structured JSON output, zero-dependency binary, Unix-native.
 
+## Platform Support
+
+| Platform | Status | Credential backend |
+|---|---|---|
+| **macOS** | Primary, fully tested | login Keychain via `security` |
+| **Linux** | Best-effort | libsecret (`secret-tool`) if installed; else chmod-600 cred file |
+| **Windows** | Out of scope | — (use WSL, then follow Linux) |
+
 ---
 
 ## 🚀 Before Running Any ESXi Command (CRITICAL)
@@ -31,6 +39,11 @@ The `missing` field lists what's absent. Possible values: `govc`, `config`, `key
 
 - DO NOT ask the user for their password in chat.
 - DO NOT auto-trigger GUI dialogs, `read -rsp` prompts, or anything that spawns interactive input from a subprocess Claude started.
+- DO NOT include, echo, or reference any real password in:
+  - any file written to disk (commit, script, log, tempfile)
+  - any `git commit -m` message or PR description
+  - any response shown to the user (redact with `<redacted>` if ever surfaced from a tool error)
+- DO NOT send the password to external agents (codex, other LLMs) for review — review the code, not the runtime state.
 - Claude's role here is purely **advisory**: print copy-pasteable commands for the user to review and run themselves in their own terminal. The user chooses the input method for the password (Keychain Access.app, OS password manager, or a CLI prompt they themselves type). Claude never sees or handles the password.
 
 **What Claude should do**:
@@ -172,8 +185,8 @@ govc find -type m
 # VM details as JSON
 govc vm.info -json '<vm-name>'
 
-# All VMs' power state + IP
-govc ls -json vm | jq -r '.elements[].Object | "\(.Name)\t\(.Runtime.PowerState)\t\(.Summary.Guest.IpAddress // "-")"'
+# All VMs' power state + IP (note: govc 0.30+ returns camelCase keys)
+govc ls -json vm | jq -r '.elements[].Object | "\(.name)\t\(.runtime.powerState)\t\(.guest.ipAddress // "-")"'
 ```
 
 ### Power operations
@@ -250,13 +263,28 @@ VMware operations touch production-critical infrastructure. Follow these rules:
 
 ## Output parsing
 
-All `govc` commands accept `-json`. Pipe to `jq` for filtering:
+All `govc` commands accept `-json`. Pipe **directly** to `jq` (do not capture to a shell variable first — bash's `echo` on macOS silently eats backslash sequences in the JSON and breaks `jq`).
 
 ```bash
-govc vm.info -json '*' | jq '.virtualMachines[] | {name: .name, cpu: .config.hardware.numCPU, mem: .config.hardware.memoryMB}'
+# ✅ Correct — direct pipe
+govc vm.info -json 'debian*' | jq '.virtualMachines[] | {name: .name, cpu: .config.hardware.numCPU, mem: .config.hardware.memoryMB}'
+
+# ❌ Wrong — echoing a variable mangles the JSON
+OUT=$(govc ls -json vm); echo "$OUT" | jq ...   # breaks on complex output
 ```
 
-For table output, use `-dump` (Go struct pretty-print) or default human format.
+Key wrapper paths (govc 0.30+ uses **camelCase** for all fields):
+
+| Command | Wrapper | Element path |
+|---|---|---|
+| `ls -json <type>` | `.elements[]` | `.Object.{camelCase fields}` |
+| `vm.info -json` | `.virtualMachines[]` | directly `.{camelCase fields}` |
+| `host.info -json` | `.hostSystems[]` | directly `.{camelCase fields}` |
+| `datastore.info -json` | `.datastores[]` | directly `.{camelCase fields}` |
+
+If `jq` reports "control characters must be escaped", you captured the JSON into a bash variable and then echoed it. Fix: pipe directly. If the data really does have control chars (rare), fall back to `python3 -c 'import json,sys; …'` which is more lenient.
+
+For non-JSON table output, use `-dump` (Go struct pretty-print) or default human format.
 
 ## Common Errors
 

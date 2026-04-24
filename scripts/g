@@ -1,15 +1,35 @@
 #!/usr/bin/env bash
-# g — govc wrapper that pipes the password from the OS keychain directly
-# into govc's env at exec time, without storing it in any intermediate
-# shell variable or the wrapper's own process environment.
+# g — govc wrapper.
 #
-# Why env var at all? govc reads credentials only from GOVC_PASSWORD,
-# -u 'user:pass@host', or ~/.govmomirc (plaintext file). Env var is the
-# least-bad of these three.
+# THREAT MODEL / WHAT THIS SCRIPT DOES AND DOES NOT PROTECT:
+#
+#   govc itself only accepts credentials via GOVC_PASSWORD env var, a
+#   `user:pass@host` URL arg, or a plaintext ~/.govmomirc. All three
+#   involve the password reaching govc somehow. This wrapper picks the
+#   least-bad option (env var) and does three things to minimize exposure:
+#
+#     1. No GOVC_PASSWORD variable is ever set in THIS wrapper's shell.
+#        The password flows: keychain CLI stdout → command substitution
+#        → `env GOVC_PASSWORD=... govc` argv → execve() → govc env.
+#
+#     2. `env -i` strips all other inherited env before exec, so only
+#        PATH/HOME/USER + GOVC_* are passed to govc. Smaller attack
+#        surface for any subprocess govc may spawn.
+#
+#     3. `exec` replaces the wrapper's process with govc, so the wrapper
+#        shell does not remain alive holding the password in RAM.
+#
+#   What this does NOT protect against:
+#     - The password IS in govc's own process environment for the duration
+#       of govc's execution. Another process with the same UID (or root)
+#       can read /proc/<govc-pid>/environ or attach via ptrace/DTrace.
+#     - If govc crashes with core dumps enabled, the password may appear
+#       in the core file. Disable core dumps (ulimit -c 0) or avoid on
+#       shared hosts.
 #
 # Credential lookup order:
 #   macOS:   security find-generic-password (login Keychain)
-#   Linux:   secret-tool lookup ... → ~/.config/esxi-skill/<profile>.cred
+#   Linux:   secret-tool lookup → ~/.config/esxi-skill/<profile>.cred
 #   Other:   ~/.config/esxi-skill/<profile>.cred (chmod 600)
 #
 # Profile: ESXI_PROFILE env var (default "default").
