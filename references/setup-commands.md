@@ -1,134 +1,108 @@
-# Setup Command Templates (by OS)
+# Password-Storage Command Reference (by OS)
 
-This file documents the **split of responsibility** between Claude and the user, with OS-specific command templates.
+This file documents the **password-step commands** that `esxi.py setup` prints to the user. All install/config work is done automatically by `esxi.py` — only the password storage is manual.
 
-**Core rule**: Claude auto-runs steps 1 and 2 (install + write config). The user runs step 3 (store password) in their own terminal. See `SKILL.md` § *Step 2 — First-Time Setup*.
-
-Replace `<HOST>`, `<USER>`, `<1|0>`, `<DC>` with the values Claude collected from the user in chat.
+Replace `<HOST>`, `<USER>` with the values you passed to `esxi.py setup`.
 
 ---
 
 ## macOS
 
-### Steps 1 & 2 — Claude runs these via the Bash tool (auto)
+Stored in macOS login Keychain.
 
-```bash
-# 1. Install govc
-command -v govc >/dev/null || brew install govc
-
-# 2. Write non-sensitive config
-mkdir -p ~/.config/esxi-skill && chmod 700 ~/.config/esxi-skill
-cat > ~/.config/esxi-skill/default.env <<'EOF'
-export GOVC_URL='<HOST>'
-export GOVC_USERNAME='<USER>'
-export GOVC_INSECURE=<1|0>
-export GOVC_DATACENTER='<DC>'
-export ESXI_CRED_SERVICE='govc-<HOST>'
-EOF
-chmod 600 ~/.config/esxi-skill/default.env
-```
-
-### Step 3 — User runs ONE of these in their own terminal
-
-**Option A (recommended)** — `security` CLI native prompt, no shell exposure:
+**Recommended** — `security` CLI native prompt (interactive, no shell exposure):
 
 ```bash
 security add-generic-password -a '<USER>' -s 'govc-<HOST>' -U -w
 ```
 
-Placing `-w` as the last arg without a value makes `security` prompt interactively (not echoed, asks to retype for confirmation). Documented in `man security`: "Specify -w as the last option to be prompted."
+Placing `-w` as the last arg without a value makes `security` prompt interactively (hidden input, asks to retype). Documented in `man security`: "Specify -w as the last option to be prompted."
 
-**Option B** — Keychain Access.app GUI:
+**Alternative** — Keychain Access.app GUI:
 
 ```bash
 open -a "Keychain Access"
 ```
 
-Then `File ▸ New Password Item…`:
+`File ▸ New Password Item…`:
 - Keychain Item Name: `govc-<HOST>`
 - Account Name: `<USER>`
 - Password: (type in the native secure field)
 
 ---
 
-## Linux (with libsecret / GNOME Keyring / KDE Wallet)
+## Linux — with libsecret (preferred)
 
-### Steps 1 & 2 — Claude runs these via the Bash tool (auto)
+Stored in GNOME Keyring / KDE Wallet / other Secret Service implementation.
 
-```bash
-# 1. Install govc
-command -v govc >/dev/null || {
-  arch=$(uname -m); case $arch in aarch64|arm64) arch=arm64 ;; x86_64) arch=x86_64 ;; esac
-  curl -fsSL "https://github.com/vmware/govmomi/releases/latest/download/govc_Linux_${arch}.tar.gz" \
-    | sudo tar -C /usr/local/bin -xzf - govc
-}
-
-# 2. Write non-sensitive config
-mkdir -p ~/.config/esxi-skill && chmod 700 ~/.config/esxi-skill
-cat > ~/.config/esxi-skill/default.env <<'EOF'
-export GOVC_URL='<HOST>'
-export GOVC_USERNAME='<USER>'
-export GOVC_INSECURE=<1|0>
-export GOVC_DATACENTER='<DC>'
-export ESXI_CRED_SERVICE='govc-<HOST>'
-EOF
-chmod 600 ~/.config/esxi-skill/default.env
-```
-
-### Step 3 — User runs ONE of these in their own terminal
-
-**Option A (libsecret, recommended)** — prompts via the keyring daemon; password goes through DBus, not the shell:
+Prerequisite: `libsecret-tools`:
+- `apt install libsecret-tools` (Debian/Ubuntu)
+- `dnf install libsecret` (Fedora/RHEL)
 
 ```bash
-secret-tool store --label="govc: <USER> @ <HOST>" \
+secret-tool store --label='govc: <USER> @ <HOST>' \
   service 'govc-<HOST>' account '<USER>'
 ```
 
-Prerequisite: `libsecret-tools` installed (`apt install libsecret-tools` on Debian/Ubuntu; `dnf install libsecret` on Fedora).
+`secret-tool` prompts via the keyring daemon's own agent. Password never touches the shell.
 
-**Option B (GUI keyring)**:
+**GUI alternatives**:
 - GNOME: open "Passwords and Keys" (`seahorse`) → Add Password
 - KDE: open "KDE Wallet Manager" → Add item
-- Set: label=`govc-<HOST>`, attributes: `service=govc-<HOST>`, `account=<USER>`
+- Attributes: `service=govc-<HOST>`, `account=<USER>`
 
 ---
 
-## Linux (no keyring — chmod-600 file fallback)
+## Linux — no libsecret (file fallback)
 
-If `libsecret` is unavailable and you don't want to install it, the `g` wrapper falls back to reading from `~/.config/esxi-skill/<profile>.cred` (chmod 600).
-
-### Step 3 — User runs in their own terminal
+Stored in `~/.config/esxi-skill/<profile>.cred` (chmod 600).
 
 ```bash
 umask 077
-read -rs -p "ESXi password: " PW && echo
+read -rs -p 'ESXi password: ' PW && echo
 printf '%s' "$PW" > ~/.config/esxi-skill/default.cred
 chmod 600 ~/.config/esxi-skill/default.cred
 unset PW
 ```
 
-**Better long-term**: install `libsecret-tools` and use Option A above.
+For stronger security, install `libsecret-tools` and use the libsecret path above.
 
 ---
 
 ## Windows (PowerShell)
 
-The `g` wrapper does not natively support Windows Credential Manager. Recommended: run this skill inside WSL (then follow the Linux section). If you must run on pure Windows/PowerShell, you'd need to extend the `g` wrapper to call `cmdkey` — not supported out of the box.
+Stored in `%APPDATA%\esxi-skill\<profile>.cred` with NTFS ACL restricted to the current user.
 
----
-
-## Verification (all OSes)
-
-After all three steps are done, Claude will run preflight to confirm:
-
-```bash
-~/.claude/skills/esxi/scripts/preflight.sh
+```powershell
+$dir = Split-Path -Parent "$env:APPDATA\esxi-skill\default.cred"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$sec = Read-Host -AsSecureString -Prompt 'ESXi password'
+$pw  = [System.Net.NetworkCredential]::new('', $sec).Password
+[IO.File]::WriteAllText("$env:APPDATA\esxi-skill\default.cred", $pw)
+icacls "$env:APPDATA\esxi-skill\default.cred" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
 ```
 
-Expect `{"ready": true, ...}`. If `can_connect: false`, the password or network is wrong — re-run the password step.
+**Note**: file-based storage. For Windows Credential Manager integration, install `keyring` via `pip install keyring` and extend `esxi.py`. Stronger alternative: run esxi-skill inside WSL.
 
 ---
 
-## Updating Password
+## Updating an Existing Password
 
-Same commands as initial step 3. The `-U` flag on macOS `security` and the `secret-tool store` command both update existing entries in place. Claude does not need to be involved in password rotation.
+Same commands as initial setup:
+- macOS `security … -U …` updates in place (the `-U` flag).
+- `secret-tool store` overwrites entries with the same attributes.
+- File-based: just re-run the `read -rs` / `Read-Host` block.
+
+No need to re-run `esxi.py setup` if only the password changed.
+
+---
+
+## Verification
+
+After storing the password:
+
+```bash
+python3 ~/.claude/skills/esxi/esxi.py preflight
+```
+
+Expect `{"ready": true, ...}`. If `can_connect: false`, the password or network is wrong.

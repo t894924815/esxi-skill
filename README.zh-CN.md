@@ -23,55 +23,49 @@
 - **项目级**：克隆到 `<your-project>/.claude/skills/esxi`
 - **全局（用户级）**：克隆到 `~/.claude/skills/esxi`
 
+## 环境要求
+
+- **Python 3.7+**（macOS 和大部分 Linux 自带；Windows 用 `winget install Python.Python.3`）
+- 其他依赖（govc 二进制、Keychain 设置）由 skill 自动处理
+
 ## 配置
 
-你对 Claude 说"列出 ESXi 上所有虚拟机"（还没配置过时）的流程拆分：
+整个 skill 是一个 Python 模块 `esxi.py`。你对 Claude 说"列出 ESXi 上所有虚拟机"（还没配置过时）：
 
-| 步骤 | 谁来做 | 说明 |
+| 步骤 | 谁来做 | 命令 |
 |---|---|---|
-| 1. 装 `govc` | **Claude 自动跑** | `brew install govc`（Linux 用 GitHub tarball） |
-| 2. 写配置文件 | **Claude 自动跑** | 非敏感字段（地址/用户名/证书/dc）写到 `~/.config/esxi-skill/default.env` |
-| 3. 存密码 | **你自己跑** | 在你自己的终端里用 OS 原生 keychain CLI 或 GUI |
+| 1. preflight 检测 | Claude 自动 | `python3 esxi.py preflight` |
+| 2. 问 4 个非敏感字段 | Claude 在 chat 问你 | 地址/用户名/证书/datacenter |
+| 3. 装 `govc` + 写配置 | Claude 自动 | `python3 esxi.py setup --host … --user … …` |
+| 4. 存密码 | **你自己**在终端跑 | 第 3 步打印的命令（按 OS 不同） |
+| 5. 再次 preflight + 列 VM | Claude 自动 | `python3 esxi.py preflight && python3 esxi.py g ls vm` |
 
-你只需要告诉 Claude 4 个非敏感字段，它就把密码之前的步骤全自动做掉。然后**只把密码这一条命令**给你：
+第 4 步是唯一手动的部分。命令按你的 OS 自动选：
 
-```bash
-# macOS（推荐）—— security CLI 的原生提示模式
-security add-generic-password -a 'root' -s 'govc-<HOST>' -U -w
-```
-
-执行后会提示输入密码（不回显、要求再输一次确认）。密码**不会**经过 Claude，也不会出现在 Claude 写入的任何文件里。
-
-你回"好了"后，Claude 重跑 preflight，然后用 `scripts/g` 执行你的原请求。
+- **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w`（原生交互提示）
+- **Linux**（有 libsecret）: `secret-tool store …`
+- **Linux**（无 libsecret）: `read -rs` → `chmod 600` 文件
+- **Windows**: PowerShell `Read-Host -AsSecureString` → `icacls` ACL 文件
 
 ### 🔐 安全设计
 
-- Claude 自动处理非敏感工作（节省打字），但把密码步骤交还给你 —— 凭据永远不经过 LLM、聊天记录、或 Claude 启动的任何进程
-- 密码只会进入：(a) `security` 自己的 TTY 交互提示（直接通过 C API 写入 Keychain，shell 完全不参与），或 (b) macOS Keychain Access.app 的原生安全输入框
+- Claude 自动做非敏感工作（节省打字），但把密码那一步交还给你 —— 凭据永远不经过 LLM、聊天记录、或 Claude 启动的任何进程
+- `esxi.py g` 用 `os.execvpe` 把 Python 进程**替换**为 govc；密码只存在于 govc 进程的环境里，Python 进程在 exec 后就不存在了
 
-Linux / Windows 的对应命令（libsecret / Credential Manager）见 [references/setup-commands.md](references/setup-commands.md)。
-
-### 非交互式初始化（CI / Ansible）
-
-密码已在环境变量或 vault 里时直接调：
-
-```bash
-echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
-```
-
-四个位置参数：`<host> <user> <insecure:1|0> <datacenter>`。密码通过 stdin 传，不会进 shell history 或进程列表。
+完整 OS 命令参考见 [references/setup-commands.md](references/setup-commands.md)。
 
 ### 多 profile
 
-有多个 ESXi / vCenter 时用 `ESXI_PROFILE`：
+多个 ESXi / vCenter 时用 `--profile` 或 `ESXI_PROFILE`：
 
 ```bash
-echo 'pw' | ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/setup.sh 'vcenter.prod' 'administrator@vsphere.local' 0
-echo 'pw' | ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab'      'root'                       1
+# 创建两个 profile
+python3 ~/.claude/skills/esxi/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 ~/.claude/skills/esxi/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
-# 后续使用
-ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm
-ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
+# 使用（每个 profile 要各自完成一次 setup 打印的密码步骤）
+python3 ~/.claude/skills/esxi/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
 ```
 
 ### （可选）在 Claude Code 设置里白名单
@@ -81,8 +75,7 @@ ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(~/.claude/skills/esxi/scripts/g *)",
-      "Bash(~/.claude/skills/esxi/scripts/preflight.sh*)"
+      "Bash(python3 ~/.claude/skills/esxi/esxi.py *)"
     ]
   }
 }
@@ -108,15 +101,21 @@ esxi-skill/
 ├── README.md                         # 英文说明
 ├── README.zh-CN.md                   # 中文说明（本文件）
 ├── LICENSE
-├── scripts/
-│   ├── preflight.sh                  # 状态检测，JSON 输出
-│   ├── setup.sh                      # 非交互版（CI/自动化场景）
-│   └── g                             # govc 包装器（自动读 Keychain/libsecret 密码）
+├── esxi.py                           # 单一 Python 入口（所有子命令）
 └── references/
     ├── govc-reference.md             # 按分类的完整命令速查
     ├── common-operations.md          # 12 个实战 recipe：健康检查、克隆+cloud-init、批量迁移等
-    ├── setup-commands.md             # 各操作系统的配置命令模板
+    ├── setup-commands.md             # 各操作系统的密码存储命令参考
     └── troubleshooting.md            # 常见错误及修复方法
+```
+
+### 使用速查
+
+```bash
+python3 ~/.claude/skills/esxi/esxi.py preflight                        # JSON 状态
+python3 ~/.claude/skills/esxi/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
+python3 ~/.claude/skills/esxi/esxi.py g ls vm                          # 跑任意 govc 命令
+python3 ~/.claude/skills/esxi/esxi.py --profile lab g vm.info ...      # 用非默认 profile
 ```
 
 ## 安全模型

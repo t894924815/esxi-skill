@@ -23,55 +23,49 @@ Clone this repository into your Claude Code skills directory (use the clone URL 
 - **Per-project**: clone into `<your-project>/.claude/skills/esxi`
 - **Global (user-level)**: clone into `~/.claude/skills/esxi`
 
+## Requirements
+
+- **Python 3.7+** (pre-installed on macOS and most Linux; `winget install Python.Python.3` on Windows)
+- Anything else (`govc` binary, keychain setup) is handled automatically by the skill.
+
 ## Setup
 
-When you ask Claude something like *"list all VMs on my ESXi host"*, and nothing has been configured yet, the split is:
+Entirely driven by a single Python module `esxi.py`. When you ask Claude *"list all VMs on my ESXi host"* and nothing is configured yet:
 
-| Action | Who | Details |
+| Step | Who | Command |
 |---|---|---|
-| 1. Install `govc` | **Claude auto-runs** | `brew install govc` (or GitHub tarball on Linux) |
-| 2. Write config file | **Claude auto-runs** | non-sensitive values (host/user/cert/dc) into `~/.config/esxi-skill/default.env` |
-| 3. Store password | **You run** | in your own terminal, using native OS keychain CLI or GUI |
+| 1. Preflight | Claude auto | `python3 esxi.py preflight` |
+| 2. Ask for 4 non-sensitive fields | Claude → you in chat | host / user / cert / datacenter |
+| 3. Install `govc` + write config | Claude auto | `python3 esxi.py setup --host … --user … …` |
+| 4. Store password | **You run** in your terminal | command printed by step 3 (per-OS) |
+| 5. Re-verify + list VMs | Claude auto | `python3 esxi.py preflight && python3 esxi.py g ls vm` |
 
-So after you tell Claude the 4 non-sensitive fields, it does everything up to the password step automatically. It then hands you **one single command** for the password:
+Step 4 is the only manual part. The command Claude prints depends on your OS:
 
-```bash
-# macOS (recommended) — security CLI's native prompt mode
-security add-generic-password -a 'root' -s 'govc-<HOST>' -U -w
-```
-
-Running this prompts for the password (hidden, not echoed, asks to retype). The password never touches Claude or any file Claude wrote.
-
-After you confirm "done", Claude re-runs preflight and executes your original request using `scripts/g`.
+- **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w` (interactive hidden prompt)
+- **Linux** (with libsecret): `secret-tool store …`
+- **Linux** (no libsecret): `read -rs` → `chmod 600` file
+- **Windows**: PowerShell `Read-Host -AsSecureString` → `icacls` ACL file
 
 ### 🔐 Security design
 
 - Claude auto-handles non-sensitive work (saving you typing), but hands off the password step so credentials never flow through the LLM, chat log, or any process Claude started.
-- The password only enters either (a) `security`'s own TTY prompt (reads directly into Keychain via C API, no shell involvement), or (b) macOS Keychain Access.app's native secure field.
+- `esxi.py g` uses `os.execvpe` to replace the Python process with `govc`; the password only lives in govc's env after exec, not in any shell or persistent Python process.
 
-For Linux / Windows equivalents (libsecret, Credential Manager), see [references/setup-commands.md](references/setup-commands.md).
-
-### Non-interactive alternative (CI / Ansible)
-
-For automation where you already have the password in an env var or vault:
-
-```bash
-echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
-```
-
-Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is piped via stdin (not in args → not in process listings or shell history).
+For full OS-specific command reference, see [references/setup-commands.md](references/setup-commands.md).
 
 ### Multi-profile
 
-For multiple ESXi hosts, use `ESXI_PROFILE`:
+For multiple ESXi hosts, use `--profile` or `ESXI_PROFILE`:
 
 ```bash
-echo 'pw' | ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/setup.sh 'vcenter.prod' 'admin@vsphere.local' 0
-echo 'pw' | ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab'      'root'                 1
+# Create two profiles
+python3 ~/.claude/skills/esxi/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 ~/.claude/skills/esxi/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
-# Later
-ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm
-ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
+# Use them (each setup prints a password command; run it once per profile)
+python3 ~/.claude/skills/esxi/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
 ```
 
 ### (Optional) Allowlist in Claude Code settings
@@ -81,8 +75,7 @@ ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(~/.claude/skills/esxi/scripts/g *)",
-      "Bash(~/.claude/skills/esxi/scripts/preflight.sh*)"
+      "Bash(python3 ~/.claude/skills/esxi/esxi.py *)"
     ]
   }
 }
@@ -108,15 +101,21 @@ esxi-skill/
 ├── README.md                         # This file (English)
 ├── README.zh-CN.md                   # Chinese translation
 ├── LICENSE
-├── scripts/
-│   ├── preflight.sh                  # Check state; JSON output
-│   ├── setup.sh                      # Non-interactive setup (for CI/automation)
-│   └── g                             # govc wrapper (reads password from Keychain/libsecret)
+├── esxi.py                           # Single Python entry point (all subcommands)
 └── references/
     ├── govc-reference.md             # Full command catalog by category
     ├── common-operations.md          # 12 recipes: health check, clone+cloud-init, migrate, etc.
-    ├── setup-commands.md             # Per-OS copy-pasteable setup command blocks
+    ├── setup-commands.md             # Per-OS password-storage command reference
     └── troubleshooting.md            # Common errors with fixes
+```
+
+### Usage cheatsheet
+
+```bash
+python3 ~/.claude/skills/esxi/esxi.py preflight                       # JSON status
+python3 ~/.claude/skills/esxi/esxi.py setup --host X --user root ...  # install + config + print pw cmd
+python3 ~/.claude/skills/esxi/esxi.py g ls vm                         # run any govc command
+python3 ~/.claude/skills/esxi/esxi.py --profile lab g vm.info ...     # non-default profile
 ```
 
 ## Safety model

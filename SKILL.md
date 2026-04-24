@@ -9,26 +9,48 @@ Manage VMware ESXi hosts and vCenter via `govc` — VMware's official Go CLI bui
 
 ## Platform Support
 
-| Platform | Status | Credential backend |
-|---|---|---|
-| **macOS** | Primary, fully tested | login Keychain via `security` |
-| **Linux** | Best-effort | libsecret (`secret-tool`) if installed; else chmod-600 cred file |
-| **Windows** | Out of scope | — (use WSL, then follow Linux) |
+The implementation is **a single Python 3 module** (`esxi.py`). Python 3.7+ is required on all platforms.
+
+| Platform | Status | govc install | Credential backend |
+|---|---|---|---|
+| **macOS** | Primary, tested | `brew install govc` (auto) | login Keychain via `security` |
+| **Linux** | Best-effort (untested end-to-end) | GitHub tarball to `/usr/local/bin` or `~/.local/bin` (auto) | libsecret (`secret-tool`) if installed; else chmod-600 cred file |
+| **Windows** | Supported with caveats | Manual (`winget` / `scoop` / `choco`) | chmod-600 cred file under `%APPDATA%\esxi-skill\`. For Windows Credential Manager integration, install `keyring` via pip and extend. |
 
 ---
 
 ## 🚀 Before Running Any ESXi Command (CRITICAL)
 
-Every invocation of this skill MUST start with a **preflight check**. Do not attempt to run `govc` directly — use the wrapper `./scripts/g` which handles credentials transparently.
+This skill is implemented in a single Python module `esxi.py` at the skill root. There is **no shell wrapper** — Claude invokes it directly.
+
+### Step 0 — Verify Python 3 is available
+
+Before anything else:
+
+```bash
+python3 --version   # or: python --version
+```
+
+If Python 3 is missing, tell the user to install it (do NOT try to auto-install Python — that's an OS-level concern). Per-OS install hints:
+
+| OS | Install command |
+|---|---|
+| macOS | `brew install python3` (or `xcode-select --install`) |
+| Debian/Ubuntu | `sudo apt install python3` |
+| Fedora/RHEL | `sudo dnf install python3` |
+| Alpine | `apk add python3` |
+| Windows | `winget install Python.Python.3` (or Microsoft Store) |
 
 ### Step 1 — Preflight
 
+Run the preflight subcommand:
+
 ```bash
-~/.claude/skills/esxi/scripts/preflight.sh
+python3 ~/.claude/skills/esxi/esxi.py preflight
 ```
 
 Output is a JSON object:
-- `{"ready": true, ...}` → proceed to the actual user request using `./scripts/g`
+- `{"ready": true, ...}` → proceed to the actual user request using `esxi.py g <args>`
 - `{"ready": false, "missing": [...]}` → follow **First-Time Setup** below
 
 ### Step 2 — First-Time Setup (when preflight returns ready=false)
@@ -50,62 +72,47 @@ The `missing` field lists what's absent. Possible values: `govc`, `config`, `key
 
 | Action | Who does it | Why |
 |---|---|---|
-| Install govc | **Claude auto-runs** via Bash tool | No secret; standard package install |
-| Write config file (host/user/cert/dc) | **Claude auto-runs** via Bash tool | Values are non-sensitive; user already told Claude them |
-| Store password in Keychain | **USER runs** in their own terminal | Password must never pass through Claude |
+| Install govc | **Claude auto-runs** `esxi.py setup` | No secret; standard package install |
+| Write config file (host/user/cert/dc) | **Claude auto-runs** `esxi.py setup` | Values are non-sensitive; user already told Claude them |
+| Store password | **USER runs** in their own terminal | Password must never pass through Claude |
 
-Only the password step is handed back to the user. Everything else Claude should just do.
+Only the password step is handed back to the user. Everything else is handled by a single `esxi.py setup` invocation, which prints the OS-appropriate password command for the user to run.
 
 **What Claude MUST do, in order**:
 
-1. **Ask the user for the non-sensitive fields** (one short chat prompt; wait for reply):
+1. **Verify Python 3** (Step 0 above). If missing, stop and help the user install it.
+
+2. **Run preflight**:
+   ```bash
+   python3 ~/.claude/skills/esxi/esxi.py preflight
+   ```
+
+3. **If preflight reports `missing: ["govc", "config"]` (first-time setup), ask the user for the non-sensitive fields** (one short chat prompt; wait for reply):
    - ESXi / vCenter host (e.g. `esxi.lab` or `10.0.0.2`)
    - Username (default `root`)
-   - Self-signed cert? y/n (→ `GOVC_INSECURE=1` or `0`)
+   - Self-signed cert? y/n (→ `--insecure 1` or `0`)
    - Datacenter (default `ha-datacenter` for standalone ESXi)
 
-2. **Auto-install govc if missing** (via Bash tool):
+4. **Run setup** (Claude invokes this via Bash; it auto-installs govc and writes config, then PRINTS the OS-appropriate password command):
    ```bash
-   command -v govc >/dev/null || brew install govc
+   python3 ~/.claude/skills/esxi/esxi.py setup \
+     --host <HOST> --user <USER> --insecure <1|0> --datacenter <DC>
    ```
 
-3. **Auto-write the config file** (via Bash tool, substituting the fields collected in step 1):
-   ```bash
-   mkdir -p ~/.config/esxi-skill && chmod 700 ~/.config/esxi-skill
-   cat > ~/.config/esxi-skill/default.env <<'EOF'
-   export GOVC_URL='<HOST>'
-   export GOVC_USERNAME='<USER>'
-   export GOVC_INSECURE=<1|0>
-   export GOVC_DATACENTER='<DC>'
-   export ESXI_CRED_SERVICE='govc-<HOST>'
-   EOF
-   chmod 600 ~/.config/esxi-skill/default.env
-   ```
+5. **Relay the password command to the user.** The output of `esxi.py setup` contains a block between `━━━` lines — this is what the user must run in their own terminal. Just show the user that block verbatim. Do NOT run it yourself.
 
-4. **Run preflight** (via Bash). Expect it to now report only `missing: ["keychain"]` — the last thing left is the password.
+6. **Wait for the user to confirm** ("done"/"好了"/etc.). Don't run anything else while waiting.
 
-5. **Output ONLY the password step for the user to run in their own terminal.** Present two options; recommend A:
+7. **Re-run preflight**. If `ready: true`, proceed to Step 3 (run the actual user request). If still failing, show the JSON and help debug.
 
-   **Option A (recommended)** — `security` CLI's native prompt (no shell exposure, asks to retype):
-   ```bash
-   security add-generic-password -a '<USER>' -s 'govc-<HOST>' -U -w
-   ```
-   Placing `-w` last without a value makes `security` prompt interactively. Documented in `man security`: "Specify -w as the last option to be prompted."
+**Password commands per OS** (handled by `esxi.py setup`, but documented here for reference):
 
-   **Option B** — Keychain Access.app GUI:
-   ```bash
-   open -a "Keychain Access"
-   # Then File ▸ New Password Item…
-   #   Keychain Item Name: govc-<HOST>
-   #   Account Name:       <USER>
-   #   Password:           (type into the native secure field)
-   ```
-
-6. **Wait for the user to confirm** ("done"/"好了"/etc.). Don't keep running things in the background while waiting.
-
-7. **Re-run preflight** (via Bash). If `ready: true`, proceed to Step 3 — execute the user's original request with `scripts/g`. If still failing, show the JSON and help debug (e.g. ask them to re-run the password step).
-
-**For Linux / Windows**: Same split applies — Claude auto-installs and writes config; the user runs the OS-native keyring command for the password. See [references/setup-commands.md](references/setup-commands.md) for OS-specific templates.
+| OS | Command printed to user |
+|---|---|
+| **macOS** | `security add-generic-password -a <USER> -s govc-<HOST> -U -w` (interactive prompt) |
+| **Linux** (libsecret) | `secret-tool store --label=… service govc-<HOST> account <USER>` |
+| **Linux** (no libsecret) | `read -rs` + write to `~/.config/esxi-skill/default.cred` (chmod 600) |
+| **Windows** | PowerShell `Read-Host -AsSecureString` + `[IO.File]::WriteAllText(…)` + `icacls` ACL |
 
 **Why this split**:
 - **Auto for non-secrets** = less friction. Typing `brew install govc` and a multi-line heredoc by hand would annoy users for no security gain.
@@ -114,26 +121,30 @@ Only the password step is handed back to the user. Everything else Claude should
 
 ### Step 3 — Run the Actual Request
 
-Use the wrapper, not raw `govc`:
+Use the `g` subcommand, not raw `govc`:
 
 ```bash
-~/.claude/skills/esxi/scripts/g ls vm
-~/.claude/skills/esxi/scripts/g vm.info -json 'web-01'
-~/.claude/skills/esxi/scripts/g about
+python3 ~/.claude/skills/esxi/esxi.py g ls vm
+python3 ~/.claude/skills/esxi/esxi.py g vm.info -json 'web-01'
+python3 ~/.claude/skills/esxi/esxi.py g about
 ```
 
-The wrapper reads config + pulls password from Keychain each time, exports env vars, then execs `govc`.
+`esxi.py g` reads config + pulls password from the OS keychain, builds a minimal env, and `os.execvpe`'s to govc. The Python process is replaced — the password only lives in govc's env after exec.
 
 ### Multi-profile (optional)
 
-For multiple ESXi hosts, set `ESXI_PROFILE` before each call:
+For multiple ESXi hosts, use `--profile` or `ESXI_PROFILE`:
 
 ```bash
-ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm       # uses ~/.config/esxi-skill/prod.env
-ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm       # uses ~/.config/esxi-skill/lab.env
+# Option 1: CLI flag
+python3 .../esxi.py --profile prod preflight
+python3 .../esxi.py --profile prod g ls vm
+
+# Option 2: env var
+ESXI_PROFILE=prod python3 .../esxi.py g ls vm
 ```
 
-To create a new profile, run setup with `ESXI_PROFILE=<name>` prefixed.
+To create a new profile, run setup with `--profile <name>`.
 
 ---
 
@@ -150,14 +161,14 @@ To create a new profile, run setup with `ESXI_PROFILE=<name>` prefixed.
 
 ## Installation & Authentication
 
-**Don't install or configure manually — the `scripts/setup.sh` helper does it all.** See the [First-Time Setup](#step-2--first-time-setup-when-preflight-returns-readyfalse) section at the top of this file.
+**Don't install or configure manually — `esxi.py setup` handles it all.** See the [First-Time Setup](#step-2--first-time-setup-when-preflight-returns-readyfalse) section at the top of this file.
 
-- `scripts/setup.sh` — installs govc (brew / GitHub release tarball), writes config, stores password in Keychain, tests connection.
-- `scripts/g` — govc wrapper: loads profile env + Keychain password, then execs govc.
-- `scripts/preflight.sh` — status check; run this first, every invocation.
+- `esxi.py preflight` — JSON status check; run this first, every invocation.
+- `esxi.py setup --host X --user Y ...` — installs govc, writes config, prints per-OS password command.
+- `esxi.py g <govc-args>` — govc wrapper: loads config + keychain password, then `os.execvpe`'s govc.
 
 The underlying env-var model is standard govc:
-`GOVC_URL`, `GOVC_USERNAME`, `GOVC_PASSWORD`, `GOVC_INSECURE`, `GOVC_DATACENTER` — but you shouldn't need to set them yourself when using the wrapper.
+`GOVC_URL`, `GOVC_USERNAME`, `GOVC_PASSWORD`, `GOVC_INSECURE`, `GOVC_DATACENTER` — `esxi.py g` builds this env from config + keychain on each call; you shouldn't need to set them yourself.
 
 ## Core Command Categories
 
@@ -181,7 +192,8 @@ See [references/govc-reference.md](references/govc-reference.md) for the full co
 
 ## Quick Recipes
 
-> **Note**: the examples below show `govc` as shorthand. When actually running, use the wrapper: **`~/.claude/skills/esxi/scripts/g`** (or `./scripts/g` from the skill dir). It auto-loads credentials from Keychain.
+> **Note**: the examples below show `govc` as shorthand. When actually running, prefix with the Python wrapper so credentials are loaded from the keychain:
+> `python3 ~/.claude/skills/esxi/esxi.py g <govc-args>`
 
 ### Inventory
 
