@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
-# g — govc wrapper that auto-loads credentials from OS-native keychain.
+# g — govc wrapper that pipes the password from the OS keychain directly
+# into govc's env at exec time, without storing it in any intermediate
+# shell variable or the wrapper's own process environment.
+#
+# Why env var at all? govc reads credentials only from GOVC_PASSWORD,
+# -u 'user:pass@host', or ~/.govmomirc (plaintext file). Env var is the
+# least-bad of these three.
 #
 # Credential lookup order:
-#   macOS:  security find-generic-password (login Keychain)
-#   Linux:  secret-tool lookup → ~/.config/esxi-skill/<profile>.cred
-#   Other:  ~/.config/esxi-skill/<profile>.cred (chmod 600)
+#   macOS:   security find-generic-password (login Keychain)
+#   Linux:   secret-tool lookup ... → ~/.config/esxi-skill/<profile>.cred
+#   Other:   ~/.config/esxi-skill/<profile>.cred (chmod 600)
 #
-# Profile is selected via ESXI_PROFILE env var (default: "default").
+# Profile: ESXI_PROFILE env var (default "default").
 #
-# Usage:
-#   g <govc-args...>
+# Usage: g <govc-args...>
 
 set -euo pipefail
 
@@ -18,62 +23,86 @@ CONF_FILE="$HOME/.config/esxi-skill/$PROFILE.env"
 
 if [ ! -f "$CONF_FILE" ]; then
   echo "esxi-skill: profile '$PROFILE' not configured ($CONF_FILE missing)" >&2
-  echo "  Run setup: bash $(dirname "$0")/setup-interactive.sh" >&2
+  echo "  Ask your AI assistant to help set it up, or see: $(dirname "$0")/../references/setup-commands.md" >&2
   exit 2
 fi
 
 # shellcheck disable=SC1090
 source "$CONF_FILE"
 
-# --- Load password from the appropriate backend ---
 KEYCHAIN_SERVICE="${ESXI_CRED_SERVICE:-govc-$GOVC_URL}"
-PW=""
-
-case "$(uname)" in
-  Darwin)
-    PW=$(security find-generic-password \
-           -a "$GOVC_USERNAME" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true)
-    if [ -z "$PW" ]; then
-      echo "esxi-skill: password not found in Keychain" >&2
-      echo "  Expected: service=$KEYCHAIN_SERVICE account=$GOVC_USERNAME" >&2
-      echo "  Re-run: bash $(dirname "$0")/setup-interactive.sh" >&2
-      exit 3
-    fi
-    ;;
-  Linux)
-    if command -v secret-tool >/dev/null 2>&1; then
-      PW=$(secret-tool lookup service "$KEYCHAIN_SERVICE" account "$GOVC_USERNAME" 2>/dev/null || true)
-    fi
-    if [ -z "$PW" ]; then
-      # Fall back to file-based credential (created by setup-interactive.sh)
-      CRED_FILE="$HOME/.config/esxi-skill/$PROFILE.cred"
-      if [ -f "$CRED_FILE" ]; then
-        PW=$(< "$CRED_FILE")
-      fi
-    fi
-    if [ -z "$PW" ]; then
-      echo "esxi-skill: password not found in libsecret or cred file" >&2
-      echo "  Re-run: bash $(dirname "$0")/setup-interactive.sh" >&2
-      exit 3
-    fi
-    ;;
-  *)
-    CRED_FILE="$HOME/.config/esxi-skill/$PROFILE.cred"
-    if [ -f "$CRED_FILE" ]; then
-      PW=$(< "$CRED_FILE")
-    else
-      echo "esxi-skill: password not found" >&2
-      exit 3
-    fi
-    ;;
-esac
 
 if ! command -v govc >/dev/null 2>&1; then
   echo "esxi-skill: govc not in PATH" >&2
-  echo "  Install by re-running setup: bash $(dirname "$0")/setup-interactive.sh" >&2
+  echo "  Install: brew install govc (macOS) or download from https://github.com/vmware/govmomi/releases" >&2
   exit 4
 fi
 
-export GOVC_PASSWORD="$PW"
-unset PW
-exec govc "$@"
+# --- Build the keychain-lookup command for the current OS ---
+# We invoke it via command substitution INSIDE the exec env assignment,
+# so the password value goes: keychain CLI stdout → exec() argv → govc env.
+# The wrapper's shell never stores the password in any variable.
+case "$(uname)" in
+  Darwin)
+    # macOS: login Keychain
+    if ! security find-generic-password \
+           -a "$GOVC_USERNAME" -s "$KEYCHAIN_SERVICE" >/dev/null 2>&1; then
+      echo "esxi-skill: password not found in Keychain (service=$KEYCHAIN_SERVICE account=$GOVC_USERNAME)" >&2
+      echo "  See setup instructions: $(dirname "$0")/../references/setup-commands.md" >&2
+      exit 3
+    fi
+    exec env -i \
+      PATH="$PATH" HOME="$HOME" USER="$USER" \
+      GOVC_URL="$GOVC_URL" \
+      GOVC_USERNAME="$GOVC_USERNAME" \
+      GOVC_INSECURE="$GOVC_INSECURE" \
+      GOVC_DATACENTER="${GOVC_DATACENTER:-ha-datacenter}" \
+      GOVC_PASSWORD="$(security find-generic-password -a "$GOVC_USERNAME" -s "$KEYCHAIN_SERVICE" -w)" \
+      govc "$@"
+    ;;
+
+  Linux)
+    # Linux: libsecret > file fallback
+    if command -v secret-tool >/dev/null 2>&1 && \
+       secret-tool lookup service "$KEYCHAIN_SERVICE" account "$GOVC_USERNAME" >/dev/null 2>&1; then
+      exec env -i \
+        PATH="$PATH" HOME="$HOME" USER="$USER" \
+        GOVC_URL="$GOVC_URL" \
+        GOVC_USERNAME="$GOVC_USERNAME" \
+        GOVC_INSECURE="$GOVC_INSECURE" \
+        GOVC_DATACENTER="${GOVC_DATACENTER:-ha-datacenter}" \
+        GOVC_PASSWORD="$(secret-tool lookup service "$KEYCHAIN_SERVICE" account "$GOVC_USERNAME")" \
+        govc "$@"
+    fi
+    CRED_FILE="$HOME/.config/esxi-skill/$PROFILE.cred"
+    if [ -f "$CRED_FILE" ]; then
+      # File read via command substitution; not via env/var in this shell.
+      exec env -i \
+        PATH="$PATH" HOME="$HOME" USER="$USER" \
+        GOVC_URL="$GOVC_URL" \
+        GOVC_USERNAME="$GOVC_USERNAME" \
+        GOVC_INSECURE="$GOVC_INSECURE" \
+        GOVC_DATACENTER="${GOVC_DATACENTER:-ha-datacenter}" \
+        GOVC_PASSWORD="$(cat "$CRED_FILE")" \
+        govc "$@"
+    fi
+    echo "esxi-skill: password not found in libsecret or $CRED_FILE" >&2
+    exit 3
+    ;;
+
+  *)
+    CRED_FILE="$HOME/.config/esxi-skill/$PROFILE.cred"
+    if [ -f "$CRED_FILE" ]; then
+      exec env -i \
+        PATH="$PATH" HOME="$HOME" USER="$USER" \
+        GOVC_URL="$GOVC_URL" \
+        GOVC_USERNAME="$GOVC_USERNAME" \
+        GOVC_INSECURE="$GOVC_INSECURE" \
+        GOVC_DATACENTER="${GOVC_DATACENTER:-ha-datacenter}" \
+        GOVC_PASSWORD="$(cat "$CRED_FILE")" \
+        govc "$@"
+    fi
+    echo "esxi-skill: password not found at $CRED_FILE" >&2
+    exit 3
+    ;;
+esac
