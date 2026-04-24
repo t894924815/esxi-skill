@@ -25,47 +25,57 @@ Clone this repository into your Claude Code skills directory (use the clone URL 
 
 ## Setup
 
-1. **Install govc**
-   ```bash
-   # macOS
-   brew install govc
+This skill auto-configures itself the first time you invoke it — no manual prep needed.
 
-   # Linux
-   curl -L -o - "https://github.com/vmware/govmomi/releases/latest/download/govc_$(uname -s)_$(uname -m).tar.gz" \
-     | sudo tar -C /usr/local/bin -xvzf - govc
+When you ask Claude something like *"list all VMs on my ESXi host"*, it will:
 
-   govc version
-   ```
+1. Run `scripts/preflight.sh` to detect what's missing.
+2. If anything is missing, Claude will ask you (via chat) for:
+   - ESXi/vCenter host
+   - Username
+   - Self-signed cert? (yes/no)
+   - Password
+3. Run `scripts/setup.sh` which:
+   - Installs `govc` (Homebrew on macOS, release tarball on Linux)
+   - Writes config to `~/.config/esxi-skill/default.env`
+   - Stores password in macOS Keychain (never in plain text on disk)
+   - Verifies the connection with `govc about`
+4. Execute your original request using the `scripts/g` wrapper.
 
-2. **Store credentials** (macOS Keychain recommended)
-   ```bash
-   security add-generic-password -a root -s govc-esxi.lab -w 'your-password' -U
-   ```
+### Manual setup (if you prefer)
 
-3. **Set env vars** (add to `~/.zshrc`)
-   ```bash
-   export GOVC_URL='esxi.lab'                  # or vCenter FQDN
-   export GOVC_USERNAME='root'                  # or administrator@vsphere.local
-   export GOVC_INSECURE=1                       # if using self-signed cert
-   export GOVC_DATACENTER='ha-datacenter'       # ESXi default
-   export GOVC_PASSWORD=$(security find-generic-password -a "$GOVC_USERNAME" -s "govc-$GOVC_URL" -w 2>/dev/null)
-   ```
+```bash
+echo 'your-password' | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
+```
 
-4. **(Optional) allowlist govc in Claude Code settings**
-   ```json
-   // .claude/settings.json
-   {
-     "permissions": {
-       "allow": ["Bash(govc *)"]
-     }
-   }
-   ```
+Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is read from stdin (so it doesn't appear in shell history or process listings).
 
-5. **Verify**
-   ```bash
-   govc about
-   govc ls
-   ```
+### Multi-profile
+
+For multiple ESXi hosts, use `ESXI_PROFILE`:
+
+```bash
+echo 'pw' | ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/setup.sh 'vcenter.prod' 'admin@vsphere.local' 0
+echo 'pw' | ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab'      'root'                 1
+
+# Later
+ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm
+ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
+```
+
+### (Optional) Allowlist in Claude Code settings
+
+```json
+// .claude/settings.json
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/skills/esxi/scripts/g *)",
+      "Bash(~/.claude/skills/esxi/scripts/preflight.sh*)"
+    ]
+  }
+}
+```
 
 ## Triggering
 
@@ -87,6 +97,10 @@ esxi-skill/
 ├── README.md                         # This file (English)
 ├── README.zh-CN.md                   # Chinese translation
 ├── LICENSE
+├── scripts/
+│   ├── preflight.sh                  # Check state; JSON output
+│   ├── setup.sh                      # Install govc + save creds + verify connection
+│   └── g                             # govc wrapper (auto-loads Keychain password)
 └── references/
     ├── govc-reference.md             # Full command catalog by category
     ├── common-operations.md          # 12 recipes: health check, clone+cloud-init, migrate, etc.

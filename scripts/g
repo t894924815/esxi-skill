@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# g — govc wrapper that auto-loads credentials from profile + Keychain.
+#
+# Usage:
+#   g <govc-args...>
+#
+# Examples:
+#   g about
+#   g ls vm
+#   g vm.info -json 'web-01'
+#
+# Profile is selected via ESXI_PROFILE env var (default: "default").
+
+set -euo pipefail
+
+PROFILE="${ESXI_PROFILE:-default}"
+CONF_FILE="$HOME/.config/esxi-skill/$PROFILE.env"
+
+if [ ! -f "$CONF_FILE" ]; then
+  echo "esxi-skill: config not found at $CONF_FILE" >&2
+  echo "  Run setup first: $(dirname "$0")/setup.sh <host> <user> [insecure] <<<'password'" >&2
+  exit 2
+fi
+
+# shellcheck disable=SC1090
+source "$CONF_FILE"
+
+if [ "$(uname)" = "Darwin" ]; then
+  # macOS: read from Keychain
+  PW=$(security find-generic-password \
+        -a "$GOVC_USERNAME" -s "govc-$GOVC_URL" -w 2>/dev/null || true)
+  if [ -z "$PW" ]; then
+    echo "esxi-skill: password not in Keychain for $GOVC_USERNAME @ govc-$GOVC_URL" >&2
+    echo "  Re-run setup: $(dirname "$0")/setup.sh $GOVC_URL $GOVC_USERNAME <<<'password'" >&2
+    exit 3
+  fi
+  export GOVC_PASSWORD="$PW"
+fi
+# Linux: GOVC_PASSWORD was sourced from conf file above.
+
+if ! command -v govc >/dev/null 2>&1; then
+  echo "esxi-skill: govc not in PATH" >&2
+  echo "  Re-run setup to install: $(dirname "$0")/setup.sh ..." >&2
+  exit 4
+fi
+
+exec govc "$@"

@@ -7,6 +7,75 @@ description: "VMware ESXi / vSphere management via govc CLI. Use when: managing 
 
 Manage VMware ESXi hosts and vCenter via `govc` — VMware's official Go CLI built on `govmomi`. Optimized for LLM-driven automation: structured JSON output, zero-dependency binary, Unix-native.
 
+---
+
+## 🚀 Before Running Any ESXi Command (CRITICAL)
+
+Every invocation of this skill MUST start with a **preflight check**. Do not attempt to run `govc` directly — use the wrapper `./scripts/g` which handles credentials transparently.
+
+### Step 1 — Preflight
+
+```bash
+~/.claude/skills/esxi/scripts/preflight.sh
+```
+
+Output is a JSON object:
+- `{"ready": true, ...}` → proceed to the actual user request using `./scripts/g`
+- `{"ready": false, "missing": [...]}` → follow **First-Time Setup** below
+
+### Step 2 — First-Time Setup (when preflight returns ready=false)
+
+The `missing` field lists what's absent. Possible values: `govc`, `config`, `keychain`.
+
+**Gather these four pieces of info from the user via chat** (ask one at a time, in order):
+
+1. **Host**: ESXi IP or FQDN (e.g. `esxi.lab` or `10.0.0.100`). For vCenter, use the vCenter FQDN.
+2. **Username**: `root` for standalone ESXi; `administrator@vsphere.local` for vCenter.
+3. **Self-signed cert?** — yes/no (default yes for home labs). Yes → `GOVC_INSECURE=1`.
+4. **Password**: ask the user for it. Warn that it will be stored in macOS Keychain after this message and only referenced indirectly thereafter.
+
+Then run:
+
+```bash
+echo '<password>' | ~/.claude/skills/esxi/scripts/setup.sh '<host>' '<user>' <1|0> 'ha-datacenter'
+```
+
+The setup script will:
+- Install `govc` if missing (Homebrew on macOS, tarball on Linux)
+- Write config to `~/.config/esxi-skill/default.env`
+- Save password to macOS Keychain (service=`govc-<host>`, account=`<user>`)
+- Verify connection with `govc about`
+
+**Security rules**:
+- The password is passed via stdin (heredoc or pipe), **never** as a positional argument — this prevents it showing up in process listings and shell history.
+- After setup succeeds, the password exists only in Keychain. Don't print it in subsequent output.
+- Don't re-echo the password back in chat.
+
+### Step 3 — Run the Actual Request
+
+Use the wrapper, not raw `govc`:
+
+```bash
+~/.claude/skills/esxi/scripts/g ls vm
+~/.claude/skills/esxi/scripts/g vm.info -json 'web-01'
+~/.claude/skills/esxi/scripts/g about
+```
+
+The wrapper reads config + pulls password from Keychain each time, exports env vars, then execs `govc`.
+
+### Multi-profile (optional)
+
+For multiple ESXi hosts, set `ESXI_PROFILE` before each call:
+
+```bash
+ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm       # uses ~/.config/esxi-skill/prod.env
+ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm       # uses ~/.config/esxi-skill/lab.env
+```
+
+To create a new profile, run setup with `ESXI_PROFILE=<name>` prefixed.
+
+---
+
 ## Why govc over PowerCLI
 
 | | govc | PowerCLI |
@@ -18,54 +87,16 @@ Manage VMware ESXi hosts and vCenter via `govc` — VMware's official Go CLI bui
 
 **Always prefer govc unless a specific feature is only in PowerCLI** (a small list: some vSAN / HCX / NSX-T operations).
 
-## Installation
+## Installation & Authentication
 
-```bash
-# macOS
-brew install govc
+**Don't install or configure manually — the `scripts/setup.sh` helper does it all.** See the [First-Time Setup](#step-2--first-time-setup-when-preflight-returns-readyfalse) section at the top of this file.
 
-# Linux
-curl -L -o - "https://github.com/vmware/govmomi/releases/latest/download/govc_$(uname -s)_$(uname -m).tar.gz" | tar -C /usr/local/bin -xvzf - govc
+- `scripts/setup.sh` — installs govc (brew / GitHub release tarball), writes config, stores password in Keychain, tests connection.
+- `scripts/g` — govc wrapper: loads profile env + Keychain password, then execs govc.
+- `scripts/preflight.sh` — status check; run this first, every invocation.
 
-# Verify
-govc version
-```
-
-## Authentication
-
-govc reads credentials from environment variables. **Never hardcode passwords**; store them in Keychain or a `.envrc` gitignored from the repo.
-
-### Required env vars
-
-```bash
-export GOVC_URL='esxi-host.example.com'              # or vCenter FQDN
-export GOVC_USERNAME='root'                          # or administrator@vsphere.local
-export GOVC_PASSWORD='...'                           # see Keychain pattern below
-export GOVC_INSECURE=1                               # self-signed cert; drop if using CA-signed
-export GOVC_DATACENTER='ha-datacenter'               # ESXi default; vCenter uses real names
-```
-
-### Keychain pattern (macOS, recommended)
-
-Store password once:
-```bash
-security add-generic-password -a "$GOVC_USERNAME" -s "govc-$GOVC_URL" -w 'password-here' -U
-```
-
-Use in session:
-```bash
-export GOVC_PASSWORD=$(security find-generic-password -a "$GOVC_USERNAME" -s "govc-$GOVC_URL" -w)
-```
-
-Put the `export` lines (without the plaintext password) in `~/.zshrc` so every shell has access.
-
-### Per-command override
-
-For one-off use without setting env:
-```bash
-govc -u "user:pass@host" -k vm.info <vm-name>
-```
-`-k` = insecure (self-signed cert), `:` separates user/pass in URL form.
+The underlying env-var model is standard govc:
+`GOVC_URL`, `GOVC_USERNAME`, `GOVC_PASSWORD`, `GOVC_INSECURE`, `GOVC_DATACENTER` — but you shouldn't need to set them yourself when using the wrapper.
 
 ## Core Command Categories
 
@@ -88,6 +119,8 @@ Run `govc <category>.<action>` — tab completion after `govc ` lists all. Key c
 See [references/govc-reference.md](references/govc-reference.md) for the full command list with arguments.
 
 ## Quick Recipes
+
+> **Note**: the examples below show `govc` as shorthand. When actually running, use the wrapper: **`~/.claude/skills/esxi/scripts/g`** (or `./scripts/g` from the skill dir). It auto-loads credentials from Keychain.
 
 ### Inventory
 

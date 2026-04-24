@@ -25,47 +25,57 @@
 
 ## 配置
 
-1. **安装 govc**
-   ```bash
-   # macOS
-   brew install govc
+这个 skill 第一次使用时会**自动完成所有前置工作**，你不用提前准备。
 
-   # Linux
-   curl -L -o - "https://github.com/vmware/govmomi/releases/latest/download/govc_$(uname -s)_$(uname -m).tar.gz" \
-     | sudo tar -C /usr/local/bin -xvzf - govc
+当你对 Claude 说"列出 ESXi 上的所有虚拟机"之类的话，它会：
 
-   govc version
-   ```
+1. 跑 `scripts/preflight.sh` 检测缺什么
+2. 如果缺东西，Claude 会**通过聊天问你**：
+   - ESXi / vCenter 地址
+   - 用户名
+   - 是不是自签证书？（yes/no）
+   - 密码
+3. 跑 `scripts/setup.sh` 完成：
+   - 安装 `govc`（macOS 用 brew，Linux 用 GitHub 发布包）
+   - 写配置到 `~/.config/esxi-skill/default.env`
+   - 密码存到 macOS Keychain（不明文落地）
+   - 用 `govc about` 验证连接
+4. 最后用 `scripts/g` 包装器跑你的原始请求
 
-2. **保存凭据**（推荐 macOS Keychain）
-   ```bash
-   security add-generic-password -a root -s govc-esxi.lab -w '你的密码' -U
-   ```
+### 手动初始化（可选）
 
-3. **设置环境变量**（加到 `~/.zshrc`）
-   ```bash
-   export GOVC_URL='esxi.lab'                   # 或 vCenter FQDN
-   export GOVC_USERNAME='root'                  # 或 administrator@vsphere.local
-   export GOVC_INSECURE=1                       # 使用自签证书时需要
-   export GOVC_DATACENTER='ha-datacenter'       # ESXi 默认值
-   export GOVC_PASSWORD=$(security find-generic-password -a "$GOVC_USERNAME" -s "govc-$GOVC_URL" -w 2>/dev/null)
-   ```
+```bash
+echo '你的密码' | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
+```
 
-4. **（可选）在 Claude Code 设置里白名单 govc**
-   ```json
-   // .claude/settings.json
-   {
-     "permissions": {
-       "allow": ["Bash(govc *)"]
-     }
-   }
-   ```
+四个位置参数：`<host> <user> <insecure:1|0> <datacenter>`。密码通过 stdin 传，不会进 shell history 或进程列表。
 
-5. **验证**
-   ```bash
-   govc about
-   govc ls
-   ```
+### 多 profile
+
+有多个 ESXi / vCenter 时用 `ESXI_PROFILE`：
+
+```bash
+echo 'pw' | ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/setup.sh 'vcenter.prod' 'administrator@vsphere.local' 0
+echo 'pw' | ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab'      'root'                       1
+
+# 后续使用
+ESXI_PROFILE=prod ~/.claude/skills/esxi/scripts/g ls vm
+ESXI_PROFILE=lab  ~/.claude/skills/esxi/scripts/g ls vm
+```
+
+### （可选）在 Claude Code 设置里白名单
+
+```json
+// .claude/settings.json
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.claude/skills/esxi/scripts/g *)",
+      "Bash(~/.claude/skills/esxi/scripts/preflight.sh*)"
+    ]
+  }
+}
+```
 
 ## 怎么触发
 
@@ -87,6 +97,10 @@ esxi-skill/
 ├── README.md                         # 英文说明
 ├── README.zh-CN.md                   # 中文说明（本文件）
 ├── LICENSE
+├── scripts/
+│   ├── preflight.sh                  # 状态检测，JSON 输出
+│   ├── setup.sh                      # 装 govc + 存凭据 + 验证连接
+│   └── g                             # govc 包装器（自动读 Keychain 密码）
 └── references/
     ├── govc-reference.md             # 按分类的完整命令速查
     ├── common-operations.md          # 12 个实战 recipe：健康检查、克隆+cloud-init、批量迁移等
