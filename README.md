@@ -1,3 +1,5 @@
+**English** | [中文](README.zh-CN.md)
+
 # esxi-skill
 
 A [Claude Code](https://claude.ai/code) skill for managing **VMware ESXi / vSphere** via the `govc` CLI.
@@ -82,7 +84,8 @@ Claude will use govc directly via the Bash tool, following the skill's safety ru
 ```
 esxi-skill/
 ├── SKILL.md                          # Main skill — loaded on trigger
-├── README.md                         # This file
+├── README.md                         # This file (English)
+├── README.zh-CN.md                   # Chinese translation
 ├── LICENSE
 └── references/
     ├── govc-reference.md             # Full command catalog by category
