@@ -15,7 +15,7 @@ The implementation is **a single Python 3 module** (`esxi.py`). Python 3.7+ is r
 |---|---|---|---|
 | **macOS** | Primary, tested | `brew install govc` (auto) | login Keychain via `security` |
 | **Linux** | Best-effort (untested end-to-end) | GitHub tarball to `/usr/local/bin` or `~/.local/bin` (auto) | libsecret (`secret-tool`) if installed; else chmod-600 cred file |
-| **Windows** | Supported with caveats | Manual (`winget` / `scoop` / `choco`) | chmod-600 cred file under `%APPDATA%\esxi-skill\`. For Windows Credential Manager integration, install `keyring` via pip and extend. |
+| **Windows** | Supported | Manual (`winget` / `scoop` / `choco`) | **Windows Credential Manager** via `keyring` (installed into a private venv at `%LOCALAPPDATA%\esxi-skill\venv`, **never global pip**); falls back to DPAPI-encrypted hex file if the venv can't be provisioned |
 
 ---
 
@@ -107,12 +107,13 @@ Only the password step is handed back to the user. Everything else is handled by
 
 **Password commands per OS** (handled by `esxi.py setup`, but documented here for reference):
 
-| OS | Command printed to user |
+| OS | Primary command printed to user |
 |---|---|
-| **macOS** | `security add-generic-password -a <USER> -s govc-<HOST> -U -w` (interactive prompt) |
-| **Linux** (libsecret) | `secret-tool store --label=… service govc-<HOST> account <USER>` |
-| **Linux** (no libsecret) | `read -rs` + write to `~/.config/esxi-skill/default.cred` (chmod 600) |
-| **Windows** | PowerShell `Read-Host -AsSecureString` + `[IO.File]::WriteAllText(…)` + `icacls` ACL |
+| **All platforms (uniform)** | `python3 .../esxi.py set-password` — hidden prompt via `getpass`, stores to OS-appropriate backend |
+| **macOS** (alternative, most secure) | `security add-generic-password -a <USER> -s govc-<HOST> -U -w` (security's own interactive prompt; password never enters Python) |
+| **Linux + libsecret** (alternative) | `secret-tool store --label=… service govc-<HOST> account <USER>` |
+
+The `set-password` uniform path is recommended unless the user has specific reason to use the native alternative (mostly paranoia about Python memory briefly holding the password).
 
 **Why this split**:
 - **Auto for non-secrets** = less friction. Typing `brew install govc` and a multi-line heredoc by hand would annoy users for no security gain.

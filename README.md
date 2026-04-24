@@ -45,7 +45,7 @@ Step 4 is the only manual part. The command Claude prints depends on your OS:
 - **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w` (interactive hidden prompt)
 - **Linux** (with libsecret): `secret-tool store …`
 - **Linux** (no libsecret): `read -rs` → `chmod 600` file
-- **Windows**: PowerShell `Read-Host -AsSecureString` → `icacls` ACL file
+- **Windows**: `keyring` (Windows Credential Manager) installed into a private venv at `%LOCALAPPDATA%\esxi-skill\venv\` — **never global pip**. Falls back to DPAPI-encrypted file if the venv can't be provisioned.
 
 ### 🔐 Security design
 

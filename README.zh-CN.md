@@ -45,7 +45,7 @@
 - **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w`（原生交互提示）
 - **Linux**（有 libsecret）: `secret-tool store …`
 - **Linux**（无 libsecret）: `read -rs` → `chmod 600` 文件
-- **Windows**: PowerShell `Read-Host -AsSecureString` → `icacls` ACL 文件
+- **Windows**: `keyring`（Windows Credential Manager）装在独立 venv `%LOCALAPPDATA%\esxi-skill\venv\` 里 —— **不做全局 pip 安装**。provision 失败时回退到 DPAPI 加密文件。
 
 ### 🔐 安全设计
 

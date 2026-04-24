@@ -69,20 +69,37 @@ For stronger security, install `libsecret-tools` and use the libsecret path abov
 
 ---
 
-## Windows (PowerShell)
+## Windows
 
-Stored in `%APPDATA%\esxi-skill\<profile>.cred` with NTFS ACL restricted to the current user.
+**Primary** — Windows Credential Manager via the `keyring` Python package. `esxi.py setup` on Windows **automatically provisions a private venv** at `%LOCALAPPDATA%\esxi-skill\venv\` and installs `keyring` into it. **No global pip install, no `pip install --user`.** Credential entries show up in Windows's "Credential Manager" control panel (Generic Credentials) and are DPAPI-encrypted under the hood.
+
+After `esxi.py setup` finishes, it prints a uniform password command:
 
 ```powershell
-$dir = Split-Path -Parent "$env:APPDATA\esxi-skill\default.cred"
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
-$sec = Read-Host -AsSecureString -Prompt 'ESXi password'
-$pw  = [System.Net.NetworkCredential]::new('', $sec).Password
-[IO.File]::WriteAllText("$env:APPDATA\esxi-skill\default.cred", $pw)
+python .../esxi.py set-password
+```
+
+which prompts for the password (hidden) and writes it into Credential Manager via `keyring`.
+
+**Fallback** — if the keyring venv can't be provisioned (offline, pip blocked, corporate policy, etc.), `esxi.py` uses a DPAPI-encrypted hex file at `%APPDATA%\esxi-skill\<profile>.cred`. Password is bound to the current Windows user + current machine. To pre-populate this file without running Python:
+
+```powershell
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent "$env:APPDATA\esxi-skill\default.cred") | Out-Null
+
+Read-Host -AsSecureString -Prompt 'ESXi password' |
+  ConvertFrom-SecureString |
+  Set-Content -LiteralPath "$env:APPDATA\esxi-skill\default.cred" -NoNewline
+
+# Defense-in-depth: restrict NTFS ACL to the current user.
 icacls "$env:APPDATA\esxi-skill\default.cred" /inheritance:r /grant:r "$($env:USERNAME):(R,W)"
 ```
 
-**Note**: file-based storage. For Windows Credential Manager integration, install `keyring` via `pip install keyring` and extend `esxi.py`. Stronger alternative: run esxi-skill inside WSL.
+**How it's secure**: `ConvertFrom-SecureString` (no `-Key`) encrypts under DPAPI with the current user's master key. Another Windows user on the same machine — or the same user on a different machine — cannot decrypt. Same cryptographic primitive that Credential Manager uses internally.
+
+**To skip the keyring auto-install** (e.g. in a restricted environment):
+```bash
+python .../esxi.py setup --host ... --user ... --no-keyring
+```
 
 ---
 
