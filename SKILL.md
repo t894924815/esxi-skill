@@ -89,7 +89,7 @@ Only the password step is handed back to the user. Everything else is handled by
    ```
 
 3. **If preflight reports `missing: ["govc", "config"]` (first-time setup), ask the user for the non-sensitive fields** (one short chat prompt; wait for reply):
-   - ESXi / vCenter host (e.g. `esxi.lab` or `10.0.0.2`)
+   - ESXi / vCenter host (e.g. `esxi.lab` or `192.0.2.10`)
    - Username (default `root`)
    - Self-signed cert? y/n (→ `--insecure 1` or `0`)
    - Datacenter (default `ha-datacenter` for standalone ESXi)
