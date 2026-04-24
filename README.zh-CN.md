@@ -30,22 +30,28 @@
 当你对 Claude 说"列出 ESXi 上的所有虚拟机"之类的话，它会：
 
 1. 跑 `scripts/preflight.sh` 检测缺什么
-2. 如果缺东西，Claude 会**通过聊天问你**：
-   - ESXi / vCenter 地址
-   - 用户名
-   - 是不是自签证书？（yes/no）
-   - 密码
-3. 跑 `scripts/setup.sh` 完成：
+2. 缺东西时，Claude 会让你**在自己的终端**里执行：
+   ```bash
+   bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
+   ```
+3. 脚本在终端里交互式问你：地址 / 用户名 / 证书类型 / 密码。**密码用 `read -rsp` 静默读取，不回显、不进 chat、不进 shell history。**
+4. 脚本自动完成：
    - 安装 `govc`（macOS 用 brew，Linux 用 GitHub 发布包）
    - 写配置到 `~/.config/esxi-skill/default.env`
    - 密码存到 macOS Keychain（不明文落地）
    - 用 `govc about` 验证连接
-4. 最后用 `scripts/g` 包装器跑你的原始请求
+5. 你跟 Claude 说一句"好了"，Claude 重新跑 preflight 确认通过，然后用 `scripts/g` 包装器执行你的原始请求
 
-### 手动初始化（可选）
+### 🔐 安全设计
+
+**凭据绝不经过 LLM 或聊天记录。** 交互脚本全程在你的终端里跑，Claude 只是指引你运行它、等你确认。信任边界跟 `sudo`、`ssh` 相同。
+
+### 非交互式初始化（自动化场景）
+
+在 CI、Ansible 等自动化场景，密码已在环境变量或 vault 里时可以直接调：
 
 ```bash
-echo '你的密码' | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
+echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
 ```
 
 四个位置参数：`<host> <user> <insecure:1|0> <datacenter>`。密码通过 stdin 传，不会进 shell history 或进程列表。
@@ -99,7 +105,8 @@ esxi-skill/
 ├── LICENSE
 ├── scripts/
 │   ├── preflight.sh                  # 状态检测，JSON 输出
-│   ├── setup.sh                      # 装 govc + 存凭据 + 验证连接
+│   ├── setup-interactive.sh          # 用户在终端运行的交互脚本（静默读密码）
+│   ├── setup.sh                      # 非交互版（自动化场景）
 │   └── g                             # govc 包装器（自动读 Keychain 密码）
 └── references/
     ├── govc-reference.md             # 按分类的完整命令速查

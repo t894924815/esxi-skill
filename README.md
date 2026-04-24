@@ -30,25 +30,31 @@ This skill auto-configures itself the first time you invoke it — no manual pre
 When you ask Claude something like *"list all VMs on my ESXi host"*, it will:
 
 1. Run `scripts/preflight.sh` to detect what's missing.
-2. If anything is missing, Claude will ask you (via chat) for:
-   - ESXi/vCenter host
-   - Username
-   - Self-signed cert? (yes/no)
-   - Password
-3. Run `scripts/setup.sh` which:
+2. If anything is missing, Claude will tell you to run this in **your own terminal**:
+   ```bash
+   bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
+   ```
+3. The interactive script prompts you for host / username / cert type / password. **Password is read silently (no echo, never in chat, never in shell history).**
+4. The script then:
    - Installs `govc` (Homebrew on macOS, release tarball on Linux)
    - Writes config to `~/.config/esxi-skill/default.env`
    - Stores password in macOS Keychain (never in plain text on disk)
    - Verifies the connection with `govc about`
-4. Execute your original request using the `scripts/g` wrapper.
+5. Tell Claude "done", Claude re-runs preflight, and executes your original request using the `scripts/g` wrapper.
 
-### Manual setup (if you prefer)
+### 🔐 Security design
+
+**Credentials never pass through the LLM or chat log.** The interactive script runs entirely in your terminal; Claude just points you at it and waits for you to confirm. Same trust boundary as `sudo` or `ssh`.
+
+### Non-interactive alternative
+
+For automation (CI, Ansible, etc.) where you already have the password in an env var or vault:
 
 ```bash
-echo 'your-password' | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
+echo "$PASSWORD" | ~/.claude/skills/esxi/scripts/setup.sh 'esxi.lab' 'root' 1 'ha-datacenter'
 ```
 
-Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is read from stdin (so it doesn't appear in shell history or process listings).
+Four positional args: `<host> <user> <insecure:1|0> <datacenter>`. Password is piped via stdin (so it doesn't appear in shell history or process listings).
 
 ### Multi-profile
 
@@ -99,7 +105,8 @@ esxi-skill/
 ├── LICENSE
 ├── scripts/
 │   ├── preflight.sh                  # Check state; JSON output
-│   ├── setup.sh                      # Install govc + save creds + verify connection
+│   ├── setup-interactive.sh          # User-run setup: prompts silently in terminal
+│   ├── setup.sh                      # Non-interactive setup (for automation)
 │   └── g                             # govc wrapper (auto-loads Keychain password)
 └── references/
     ├── govc-reference.md             # Full command catalog by category

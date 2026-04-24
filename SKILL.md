@@ -27,29 +27,35 @@ Output is a JSON object:
 
 The `missing` field lists what's absent. Possible values: `govc`, `config`, `keychain`.
 
-**Gather these four pieces of info from the user via chat** (ask one at a time, in order):
+**🔐 CRITICAL SECURITY RULE — DO NOT collect credentials via chat.**
 
-1. **Host**: ESXi IP or FQDN (e.g. `esxi.lab` or `10.0.0.100`). For vCenter, use the vCenter FQDN.
-2. **Username**: `root` for standalone ESXi; `administrator@vsphere.local` for vCenter.
-3. **Self-signed cert?** — yes/no (default yes for home labs). Yes → `GOVC_INSECURE=1`.
-4. **Password**: ask the user for it. Warn that it will be stored in macOS Keychain after this message and only referenced indirectly thereafter.
-
-Then run:
+Do NOT ask the user for their password in chat. Do NOT ask for hostname/username either (they're less sensitive, but uniform handling is safer). Instead, output the following **command for the user to run in their OWN terminal**:
 
 ```bash
-echo '<password>' | ~/.claude/skills/esxi/scripts/setup.sh '<host>' '<user>' <1|0> 'ha-datacenter'
+bash ~/.claude/skills/esxi/scripts/setup-interactive.sh
 ```
 
-The setup script will:
-- Install `govc` if missing (Homebrew on macOS, tarball on Linux)
-- Write config to `~/.config/esxi-skill/default.env`
-- Save password to macOS Keychain (service=`govc-<host>`, account=`<user>`)
-- Verify connection with `govc about`
+(For a non-default profile: `ESXI_PROFILE=lab bash ~/.claude/skills/esxi/scripts/setup-interactive.sh`)
 
-**Security rules**:
-- The password is passed via stdin (heredoc or pipe), **never** as a positional argument — this prevents it showing up in process listings and shell history.
-- After setup succeeds, the password exists only in Keychain. Don't print it in subsequent output.
-- Don't re-echo the password back in chat.
+This script:
+- Prompts for host / username / cert type / password interactively in the user's terminal
+- Reads password with `read -rsp` (hidden, never printed, never shell history)
+- Installs govc if missing
+- Saves everything appropriately (config → `~/.config/esxi-skill/<profile>.env`; password → macOS Keychain)
+- Verifies the connection
+
+**What Claude should do**:
+
+1. Detect the setup is needed (from preflight output).
+2. Tell the user clearly: "To configure, please run this command in your terminal:" and show the exact command above.
+3. Wait for the user to reply (e.g. "done", "配好了", or similar). Do NOT push the user to share the password or any field.
+4. Once the user confirms, **re-run `preflight.sh`** to verify. If `ready: true`, proceed to the original request.
+5. If preflight still fails, show the JSON output to help debug, and suggest re-running the interactive setup.
+
+**Why this matters**:
+- Password never passes through the LLM, chat log, or clipboard.
+- User's terminal `read -rsp` is the trusted input boundary, same mechanism `sudo`/`ssh` use.
+- Keeps Claude auditable: anyone reading the chat log sees zero credentials.
 
 ### Step 3 — Run the Actual Request
 
