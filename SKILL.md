@@ -22,7 +22,14 @@ The implementation is **a single Python 3 module** (`esxi.py`). Python 3.7+ is r
 
 ## 🚀 Before Running Any ESXi Command (CRITICAL)
 
-This skill is implemented in a single Python module `esxi.py` at the skill root. There is **no shell wrapper** — Claude invokes it directly.
+This skill is implemented in a single Python module `esxi.py` at the skill root. There is **no shell wrapper** — the AI agent invokes it directly.
+
+> **Path convention**: every command below uses `<SKILL_DIR>` to mean the directory containing this `SKILL.md`. Substitute it with whichever location your AI agent loaded the skill from:
+> - **Claude Code**: `~/.claude/skills/esxi/`
+> - **OpenAI Codex CLI**: `~/.codex/skills/esxi/`
+> - **Other / project-local**: whatever path you cloned/installed to
+>
+> The agent already knows this path — it loaded `SKILL.md` from it. Just substitute consistently.
 
 ### Step 0 — Verify Python 3 is available
 
@@ -47,7 +54,7 @@ If Python 3 is missing, tell the user to install it (do NOT try to auto-install 
 Run the preflight subcommand:
 
 ```bash
-python3 ~/.claude/skills/esxi/esxi.py preflight
+python3 <SKILL_DIR>/esxi.py preflight
 ```
 
 Output is a JSON object:
@@ -85,7 +92,7 @@ Only the password step is handed back to the user. Everything else is handled by
 
 2. **Run preflight**:
    ```bash
-   python3 ~/.claude/skills/esxi/esxi.py preflight
+   python3 <SKILL_DIR>/esxi.py preflight
    ```
 
 3. **If preflight reports `missing: ["govc", "config"]` (first-time setup), ask the user for the non-sensitive fields** (one short chat prompt; wait for reply):
@@ -96,7 +103,7 @@ Only the password step is handed back to the user. Everything else is handled by
 
 4. **Run setup** (Claude invokes this via Bash; it auto-installs govc and writes config, then PRINTS the OS-appropriate password command):
    ```bash
-   python3 ~/.claude/skills/esxi/esxi.py setup \
+   python3 <SKILL_DIR>/esxi.py setup \
      --host <HOST> --user <USER> --insecure <1|0> --datacenter <DC>
    ```
 
@@ -130,9 +137,9 @@ Only the password step is handed back to the user. Everything else is handled by
 Use the `g` subcommand, not raw `govc`:
 
 ```bash
-python3 ~/.claude/skills/esxi/esxi.py g ls vm
-python3 ~/.claude/skills/esxi/esxi.py g vm.info -json 'web-01'
-python3 ~/.claude/skills/esxi/esxi.py g about
+python3 <SKILL_DIR>/esxi.py g ls vm
+python3 <SKILL_DIR>/esxi.py g vm.info -json 'web-01'
+python3 <SKILL_DIR>/esxi.py g about
 ```
 
 `esxi.py g` reads config + pulls password from the OS keychain, builds a minimal env, and `os.execvpe`'s to govc. The Python process is replaced — the password only lives in govc's env after exec.
@@ -199,7 +206,7 @@ See [references/govc-reference.md](references/govc-reference.md) for the full co
 ## Quick Recipes
 
 > **Note**: the examples below show `govc` as shorthand. When actually running, prefix with the Python wrapper so credentials are loaded from the keychain:
-> `python3 ~/.claude/skills/esxi/esxi.py g <govc-args>`
+> `python3 <SKILL_DIR>/esxi.py g <govc-args>`
 
 ### Inventory
 

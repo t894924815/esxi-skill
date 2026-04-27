@@ -20,8 +20,16 @@
 
 把本仓库克隆到 Claude Code 的 skills 目录（clone URL 在本仓库 GitHub 页面上）。
 
-- **项目级**：克隆到 `<your-project>/.claude/skills/esxi`
-- **全局（用户级）**：克隆到 `~/.claude/skills/esxi`
+| AI Agent | 安装位置 |
+|---|---|
+| **Claude Code**（全局） | `~/.claude/skills/esxi/` |
+| **Claude Code**（项目级） | `<your-project>/.claude/skills/esxi/` |
+| **OpenAI Codex CLI** | `~/.codex/skills/esxi/` |
+| **其他** | agent 自己的 skills 目录 |
+
+```bash
+git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
+```
 
 ## 环境要求
 
@@ -61,12 +69,12 @@
 
 ```bash
 # 创建两个 profile
-python3 ~/.claude/skills/esxi/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 ~/.claude/skills/esxi/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
+python3 <SKILL_DIR>/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 <SKILL_DIR>/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
 # 使用（每个 profile 要各自完成一次 setup 打印的密码步骤）
-python3 ~/.claude/skills/esxi/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
+python3 <SKILL_DIR>/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
 ```
 
 ### （可选）在 Claude Code 设置里白名单
@@ -76,7 +84,7 @@ ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(python3 ~/.claude/skills/esxi/esxi.py *)"
+      "Bash(python3 <SKILL_DIR>/esxi.py *)"
     ]
   }
 }
@@ -113,10 +121,10 @@ esxi-skill/
 ### 使用速查
 
 ```bash
-python3 ~/.claude/skills/esxi/esxi.py preflight                        # JSON 状态
-python3 ~/.claude/skills/esxi/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
-python3 ~/.claude/skills/esxi/esxi.py g ls vm                          # 跑任意 govc 命令
-python3 ~/.claude/skills/esxi/esxi.py --profile lab g vm.info ...      # 用非默认 profile
+python3 <SKILL_DIR>/esxi.py preflight                        # JSON 状态
+python3 <SKILL_DIR>/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
+python3 <SKILL_DIR>/esxi.py g ls vm                          # 跑任意 govc 命令
+python3 <SKILL_DIR>/esxi.py --profile lab g vm.info ...      # 用非默认 profile
 ```
 
 ## 安全模型

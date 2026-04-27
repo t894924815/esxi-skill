@@ -18,10 +18,18 @@ Designed for LLM-driven automation: structured JSON output, fast startup, Unix-n
 
 ## Install
 
-Clone this repository into your Claude Code skills directory (use the clone URL from this repo's GitHub page).
+Clone this repository into your AI agent's skills directory:
 
-- **Per-project**: clone into `<your-project>/.claude/skills/esxi`
-- **Global (user-level)**: clone into `~/.claude/skills/esxi`
+| Agent | Install location |
+|---|---|
+| **Claude Code** (global) | `~/.claude/skills/esxi/` |
+| **Claude Code** (project-local) | `<your-project>/.claude/skills/esxi/` |
+| **OpenAI Codex CLI** | `~/.codex/skills/esxi/` |
+| **Other** | whatever skills directory your agent uses |
+
+```bash
+git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
+```
 
 ## Requirements
 
@@ -61,12 +69,12 @@ For multiple ESXi hosts, use `--profile` or `ESXI_PROFILE`:
 
 ```bash
 # Create two profiles
-python3 ~/.claude/skills/esxi/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 ~/.claude/skills/esxi/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
+python3 <SKILL_DIR>/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 <SKILL_DIR>/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
 # Use them (each setup prints a password command; run it once per profile)
-python3 ~/.claude/skills/esxi/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
+python3 <SKILL_DIR>/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
 ```
 
 ### (Optional) Allowlist in Claude Code settings
@@ -76,7 +84,7 @@ ESXI_PROFILE=lab python3 ~/.claude/skills/esxi/esxi.py g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(python3 ~/.claude/skills/esxi/esxi.py *)"
+      "Bash(python3 <SKILL_DIR>/esxi.py *)"
     ]
   }
 }
@@ -113,10 +121,10 @@ esxi-skill/
 ### Usage cheatsheet
 
 ```bash
-python3 ~/.claude/skills/esxi/esxi.py preflight                       # JSON status
-python3 ~/.claude/skills/esxi/esxi.py setup --host X --user root ...  # install + config + print pw cmd
-python3 ~/.claude/skills/esxi/esxi.py g ls vm                         # run any govc command
-python3 ~/.claude/skills/esxi/esxi.py --profile lab g vm.info ...     # non-default profile
+python3 <SKILL_DIR>/esxi.py preflight                       # JSON status
+python3 <SKILL_DIR>/esxi.py setup --host X --user root ...  # install + config + print pw cmd
+python3 <SKILL_DIR>/esxi.py g ls vm                         # run any govc command
+python3 <SKILL_DIR>/esxi.py --profile lab g vm.info ...     # non-default profile
 ```
 
 ## Safety model

@@ -98,7 +98,7 @@ Same commands. `security … -U …` updates in place, `secret-tool store` overw
 After storing the password:
 
 ```bash
-python3 ~/.claude/skills/esxi/esxi.py preflight
+python3 <SKILL_DIR>/esxi.py preflight
 ```
 
 Expect `{"ready": true, ...}`. If `can_connect: false`, the password or network is wrong.
