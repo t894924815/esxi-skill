@@ -4,6 +4,24 @@ Comprehensive reference for `govc` commands, grouped by category. Each command s
 
 > **Tip**: all commands accept `-json` for structured output, `-dump` for Go-struct pretty-print, and `-xml` for raw SOAP.
 
+## Contents
+
+- [Global Flags](#global-flags)
+- [Inventory & Search](#inventory--search)
+- [VM Operations (`vm.*`)](#vm-operations-vm)
+- [Snapshots (`snapshot.*`)](#snapshots-snapshot)
+- [Datastore (`datastore.*`)](#datastore-datastore)
+- [Host (`host.*`)](#host-host)
+- [Network (`network.*` / `dvs.*`)](#network-network--dvs)
+- [Events & Tasks](#events--tasks)
+- [OVF / OVA import/export](#ovf--ova-importexport)
+- [Resource Pools (`pool.*`)](#resource-pools-pool)
+- [Permissions & Roles](#permissions--roles)
+- [Cluster (`cluster.*`)](#cluster-cluster)
+- [Licenses](#licenses)
+- [esxcli passthrough](#esxcli-passthrough)
+- [Useful one-liners](#useful-one-liners)
+
 ---
 
 ## Global Flags

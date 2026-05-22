@@ -2,6 +2,21 @@
 
 Playbook-style recipes for frequent ESXi / vSphere operations.
 
+## Contents
+
+- [1. Daily Health Check](#1-daily-health-check)
+- [2. Build a VM from Scratch](#2-build-a-vm-from-scratch)
+- [3. Clone from Template + Cloud-init](#3-clone-from-template--cloud-init)
+- [4. Snapshot Strategy](#4-snapshot-strategy)
+- [5. Migrate VMs Off a Host (for maintenance)](#5-migrate-vms-off-a-host-for-maintenance)
+- [6. Bulk Create from CSV](#6-bulk-create-from-csv)
+- [7. Tag & Organize](#7-tag--organize)
+- [8. Network Changes](#8-network-changes)
+- [9. Datastore Cleanup](#9-datastore-cleanup)
+- [10. Upload / Download](#10-upload--download)
+- [11. Backup via OVF Export](#11-backup-via-ovf-export)
+- [12. Query Patterns (jq)](#12-query-patterns-jq)
+
 ---
 
 ## 1. Daily Health Check

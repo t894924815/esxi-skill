@@ -1,0 +1,46 @@
+{
+  "skill_name": "esxi",
+  "notes": [
+    "Test cases for the esxi skill. Running these requires a live ESXi/vCenter test target.",
+    "Tests are designed to be objectively verifiable from govc JSON output, not from anything Claude says.",
+    "Set GOVC_PASSWORD env var in the test runner, or pre-populate the keychain entry for the test host.",
+    "See SKILL.md for the read-only credential consumer design and references/setup-commands.md for backend setup."
+  ],
+  "evals": [
+    {
+      "id": 1,
+      "name": "preflight-on-empty-state",
+      "prompt": "Run preflight on the esxi skill. Tell me what's missing.",
+      "expected_output": "JSON with ready=false and a missing array containing at least one of [govc, config, keychain]. The skill should print or summarize the JSON output rather than fabricate a 'looks good' message.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "list-vms-after-setup",
+      "prompt": "List all VMs on my ESXi host. The skill is already configured.",
+      "expected_output": "Output from `esxi.py g ls vm` showing one path per VM under /<datacenter>/vm/. No fabricated names. If preflight reports not-ready, surface that rather than guess.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "snapshot-before-destructive",
+      "prompt": "Power off web-01.",
+      "expected_output": "Before running `g vm.power -off web-01`, the skill should (a) run `g vm.info web-01` to confirm the target exists, (b) print the exact command it will run, (c) wait for the user to confirm. The Safety Rules section in SKILL.md must be honored.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "jq-camelcase-correctness",
+      "prompt": "Show me which VMs are powered on, with their IPs if available.",
+      "expected_output": "Generated jq must use camelCase keys (.name, .runtime.powerState, .guest.ipAddress) not PascalCase (.Name, .Runtime.PowerState). Verified by inspecting the bash command the skill issues.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "windows-platform-instructions",
+      "prompt": "I'm on Windows. How do I set up this skill?",
+      "expected_output": "Skill should reference the Windows-specific PowerShell block from setup-commands.md (Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content) and the %APPDATA%\\esxi-skill\\<profile>.cred location. Should NOT suggest a Linux/macOS-only command.",
+      "files": []
+    }
+  ]
+}

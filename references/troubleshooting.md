@@ -2,6 +2,17 @@
 
 Common errors encountered when using `govc` against ESXi / vCenter.
 
+## Contents
+
+- [Connection & Auth](#connection--auth)
+- [VM Operations](#vm-operations)
+- [Snapshots](#snapshots)
+- [Datastore](#datastore)
+- [Host](#host)
+- [Performance / Hangs](#performance--hangs)
+- [Output Parsing Pitfalls](#output-parsing-pitfalls)
+- [Getting More Debug Info](#getting-more-debug-info)
+
 ---
 
 ## Connection & Auth

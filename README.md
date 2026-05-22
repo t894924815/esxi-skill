@@ -52,7 +52,6 @@ Step 4 is the only manual part. The command Claude prints depends on your OS:
 
 - **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w` (interactive hidden prompt)
 - **Linux** (with libsecret): `secret-tool store …`
-- **Linux** (no libsecret): `read -rs` → `chmod 600` file
 - **Linux** (no libsecret): **not supported by default** — install `libsecret-tools` or use `GOVC_PASSWORD` env var for CI. We deliberately refuse to fall back to a plaintext chmod-600 file.
 - **Windows**: PowerShell `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content` → DPAPI-encrypted hex file at `%APPDATA%\esxi-skill\<profile>.cred`. Plaintext never hits disk.
 
@@ -69,12 +68,12 @@ For multiple ESXi hosts, use `--profile` or `ESXI_PROFILE`:
 
 ```bash
 # Create two profiles
-python3 <SKILL_DIR>/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 <SKILL_DIR>/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
+python3 <SKILL_DIR>/scripts/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 <SKILL_DIR>/scripts/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
 # Use them (each setup prints a password command; run it once per profile)
-python3 <SKILL_DIR>/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
+python3 <SKILL_DIR>/scripts/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 <SKILL_DIR>/scripts/esxi.py g ls vm
 ```
 
 ### (Optional) Allowlist in Claude Code settings
@@ -84,7 +83,7 @@ ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(python3 <SKILL_DIR>/esxi.py *)"
+      "Bash(python3 <SKILL_DIR>/scripts/esxi.py *)"
     ]
   }
 }
@@ -110,7 +109,8 @@ esxi-skill/
 ├── README.md                         # This file (English)
 ├── README.zh-CN.md                   # Chinese translation
 ├── LICENSE
-├── esxi.py                           # Single Python entry point (all subcommands)
+├── scripts/
+│   └── esxi.py                       # Single Python entry point (all subcommands)
 └── references/
     ├── govc-reference.md             # Full command catalog by category
     ├── common-operations.md          # 12 recipes: health check, clone+cloud-init, migrate, etc.
@@ -121,10 +121,10 @@ esxi-skill/
 ### Usage cheatsheet
 
 ```bash
-python3 <SKILL_DIR>/esxi.py preflight                       # JSON status
-python3 <SKILL_DIR>/esxi.py setup --host X --user root ...  # install + config + print pw cmd
-python3 <SKILL_DIR>/esxi.py g ls vm                         # run any govc command
-python3 <SKILL_DIR>/esxi.py --profile lab g vm.info ...     # non-default profile
+python3 <SKILL_DIR>/scripts/esxi.py preflight                       # JSON status
+python3 <SKILL_DIR>/scripts/esxi.py setup --host X --user root ...  # install + config + print pw cmd
+python3 <SKILL_DIR>/scripts/esxi.py g ls vm                         # run any govc command
+python3 <SKILL_DIR>/scripts/esxi.py --profile lab g vm.info ...     # non-default profile
 ```
 
 ## Safety model

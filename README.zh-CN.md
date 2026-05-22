@@ -52,7 +52,6 @@ git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
 
 - **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w`（原生交互提示）
 - **Linux**（有 libsecret）: `secret-tool store …`
-- **Linux**（无 libsecret）: `read -rs` → `chmod 600` 文件
 - **Linux**（无 libsecret）：**默认不支持** —— 让用户装 `libsecret-tools`，或用 `GOVC_PASSWORD` env var 做 CI。**故意不**回退到 chmod-600 明文文件。
 - **Windows**: PowerShell `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content` → DPAPI 加密 hex 文件（`%APPDATA%\esxi-skill\<profile>.cred`）。明文不落盘。
 
@@ -69,12 +68,12 @@ git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
 
 ```bash
 # 创建两个 profile
-python3 <SKILL_DIR>/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 <SKILL_DIR>/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
+python3 <SKILL_DIR>/scripts/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
+python3 <SKILL_DIR>/scripts/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
 
 # 使用（每个 profile 要各自完成一次 setup 打印的密码步骤）
-python3 <SKILL_DIR>/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
+python3 <SKILL_DIR>/scripts/esxi.py --profile prod g ls vm
+ESXI_PROFILE=lab python3 <SKILL_DIR>/scripts/esxi.py g ls vm
 ```
 
 ### （可选）在 Claude Code 设置里白名单
@@ -84,7 +83,7 @@ ESXI_PROFILE=lab python3 <SKILL_DIR>/esxi.py g ls vm
 {
   "permissions": {
     "allow": [
-      "Bash(python3 <SKILL_DIR>/esxi.py *)"
+      "Bash(python3 <SKILL_DIR>/scripts/esxi.py *)"
     ]
   }
 }
@@ -110,7 +109,8 @@ esxi-skill/
 ├── README.md                         # 英文说明
 ├── README.zh-CN.md                   # 中文说明（本文件）
 ├── LICENSE
-├── esxi.py                           # 单一 Python 入口（所有子命令）
+├── scripts/
+│   └── esxi.py                       # 单一 Python 入口（所有子命令）
 └── references/
     ├── govc-reference.md             # 按分类的完整命令速查
     ├── common-operations.md          # 12 个实战 recipe：健康检查、克隆+cloud-init、批量迁移等
@@ -121,10 +121,10 @@ esxi-skill/
 ### 使用速查
 
 ```bash
-python3 <SKILL_DIR>/esxi.py preflight                        # JSON 状态
-python3 <SKILL_DIR>/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
-python3 <SKILL_DIR>/esxi.py g ls vm                          # 跑任意 govc 命令
-python3 <SKILL_DIR>/esxi.py --profile lab g vm.info ...      # 用非默认 profile
+python3 <SKILL_DIR>/scripts/esxi.py preflight                        # JSON 状态
+python3 <SKILL_DIR>/scripts/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
+python3 <SKILL_DIR>/scripts/esxi.py g ls vm                          # 跑任意 govc 命令
+python3 <SKILL_DIR>/scripts/esxi.py --profile lab g vm.info ...      # 用非默认 profile
 ```
 
 ## 安全模型
