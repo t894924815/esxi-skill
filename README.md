@@ -2,155 +2,89 @@
 
 # esxi-skill
 
-A [Claude Code](https://claude.ai/code) skill for managing **VMware ESXi / vSphere** via the `govc` CLI.
+A [Claude Code](https://claude.ai/code) / [Codex CLI](https://github.com/openai/codex) **agent skill** for managing **VMware ESXi & vSphere** infrastructure via `govc`.
 
-Designed for LLM-driven automation: structured JSON output, fast startup, Unix-native. Covers VM lifecycle, snapshots, datastores, hosts, networks, OVA import/export, and bulk ops.
+This repository is the **upstream project**. The actual skill content lives under [`esxi/`](esxi/) — that subdirectory is what gets installed into your AI agent's skills directory.
 
-## Why a dedicated skill
+---
 
-`govc` is powerful but has 400+ commands across 40+ categories. Without context, an LLM either hallucinates syntax or defaults to less suitable tools (PowerCLI, manual SSH). This skill packages:
+## Why this skill exists
 
-- **Triggering guidance** — Claude knows when to invoke it (VM ops, ESXi questions, vCenter automation)
-- **Safety rules** — destructive ops require explicit confirmation; snapshots ≠ backups
-- **Recipes** — common playbooks (health check, clone + cloud-init, bulk create, maintenance mode)
-- **Troubleshooting** — common errors with fixes
-- **Full command reference** — every `govc` category with flags and examples
+`govc` is VMware's official Go CLI for vSphere. It exposes 400+ commands across 40+ categories — powerful, but cumbersome for LLM agents to use blindly. Without context, an LLM will:
 
-## Install
+- Hallucinate command syntax
+- Fall back to less suitable tools (PowerCLI, manual SSH)
+- Use stale `PascalCase` jq paths against `govc 0.30+` (which switched to `camelCase`)
+- Treat snapshots as backups, or run destructive ops without confirmation
+- Leak credentials into chat logs and shell history
 
-Clone this repository into your AI agent's skills directory:
+`esxi-skill` packages the operational knowledge an LLM needs to drive `govc` safely and idiomatically: triggering rules, safety guards, per-OS credential handling, recipes for common tasks, and troubleshooting references.
 
-| Agent | Install location |
-|---|---|
-| **Claude Code** (global) | `~/.claude/skills/esxi/` |
-| **Claude Code** (project-local) | `<your-project>/.claude/skills/esxi/` |
-| **OpenAI Codex CLI** | `~/.codex/skills/esxi/` |
-| **Other** | whatever skills directory your agent uses |
+## What it does
 
-```bash
-git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
-```
+- **VM lifecycle**: create, clone (incl. linked + cloud-init), power, destroy, migrate
+- **Snapshots**: create / revert / consolidate, with anti-bloat warnings
+- **Datastore**: browse, upload/download, capacity reports
+- **Host**: maintenance mode, esxcli passthrough, service control
+- **Network**: vSwitch / DVS / port groups
+- **OVA/OVF**: import / export
+- **Bulk ops**: health check, mass migrate, CSV-driven create
 
-## Requirements
+## Design highlights
 
-- **Python 3.7+** (pre-installed on macOS and most Linux; `winget install Python.Python.3` on Windows)
-- Anything else (`govc` binary, keychain setup) is handled automatically by the skill.
+- **Read-only credential consumer** — the skill never writes passwords. The user runs an OS-native command (Keychain `security`, libsecret `secret-tool`, Windows DPAPI PowerShell) and the skill reads from that store.
+- **Cross-platform**: macOS (primary, tested), Linux (libsecret), Windows (DPAPI file).
+- **Zero pip dependencies** — pure Python 3.7+ stdlib.
+- **Single Python entry point** at [`esxi/scripts/esxi.py`](esxi/scripts/esxi.py). Three subcommands: `preflight`, `setup`, `g`.
+- **`os.execvpe` for the wrapper** — Python is replaced by `govc`; password only lives in `govc`'s env after exec.
 
-## Setup
-
-Entirely driven by a single Python module `esxi.py`. When you ask Claude *"list all VMs on my ESXi host"* and nothing is configured yet:
-
-| Step | Who | Command |
-|---|---|---|
-| 1. Preflight | Claude auto | `python3 esxi.py preflight` |
-| 2. Ask for 4 non-sensitive fields | Claude → you in chat | host / user / cert / datacenter |
-| 3. Install `govc` + write config | Claude auto | `python3 esxi.py setup --host … --user … …` |
-| 4. Store password | **You run** in your terminal | command printed by step 3 (per-OS) |
-| 5. Re-verify + list VMs | Claude auto | `python3 esxi.py preflight && python3 esxi.py g ls vm` |
-
-Step 4 is the only manual part. The command Claude prints depends on your OS:
-
-- **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w` (interactive hidden prompt)
-- **Linux** (with libsecret): `secret-tool store …`
-- **Linux** (no libsecret): **not supported by default** — install `libsecret-tools` or use `GOVC_PASSWORD` env var for CI. We deliberately refuse to fall back to a plaintext chmod-600 file.
-- **Windows**: PowerShell `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content` → DPAPI-encrypted hex file at `%APPDATA%\esxi-skill\<profile>.cred`. Plaintext never hits disk.
-
-### 🔐 Security design
-
-- Claude auto-handles non-sensitive work (saving you typing), but hands off the password step so credentials never flow through the LLM, chat log, or any process Claude started.
-- `esxi.py g` uses `os.execvpe` to replace the Python process with `govc`; the password only lives in govc's env after exec, not in any shell or persistent Python process.
-
-For full OS-specific command reference, see [references/setup-commands.md](references/setup-commands.md).
-
-### Multi-profile
-
-For multiple ESXi hosts, use `--profile` or `ESXI_PROFILE`:
+## Quick install
 
 ```bash
-# Create two profiles
-python3 <SKILL_DIR>/scripts/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 <SKILL_DIR>/scripts/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
-
-# Use them (each setup prints a password command; run it once per profile)
-python3 <SKILL_DIR>/scripts/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 <SKILL_DIR>/scripts/esxi.py g ls vm
+git clone https://github.com/<owner>/esxi-skill.git
+# Then symlink the skill subdir into your agent's skills directory:
+ln -s "$(pwd)/esxi-skill/esxi" ~/.claude/skills/esxi          # Claude Code
+ln -s "$(pwd)/esxi-skill/esxi" ~/.codex/skills/esxi           # Codex CLI
 ```
 
-### (Optional) Allowlist in Claude Code settings
+Full install guide and per-OS prerequisites: **[SETUP.md](SETUP.md)**.
 
-```json
-// .claude/settings.json
-{
-  "permissions": {
-    "allow": [
-      "Bash(python3 <SKILL_DIR>/scripts/esxi.py *)"
-    ]
-  }
-}
-```
-
-## Triggering
-
-Ask Claude Code things like:
-
-- "List all VMs on my ESXi host"
-- "Create a snapshot of web-01 before I update it"
-- "Which datastores are over 80% full?"
-- "Migrate all VMs off esxi1.lab so I can put it in maintenance mode"
-- "Clone ubuntu-template to a new VM named app-prod with 4 CPU and 8GB RAM"
-
-Claude will use govc directly via the Bash tool, following the skill's safety rules (read-first, confirm destructive ops, prefer JSON output for parsing).
-
-## Contents
+## Repository layout
 
 ```
-esxi-skill/
-├── SKILL.md                          # Main skill — loaded on trigger
-├── README.md                         # This file (English)
-├── README.zh-CN.md                   # Chinese translation
-├── LICENSE
-├── scripts/
-│   └── esxi.py                       # Single Python entry point (all subcommands)
-└── references/
-    ├── govc-reference.md             # Full command catalog by category
-    ├── common-operations.md          # 12 recipes: health check, clone+cloud-init, migrate, etc.
-    ├── setup-commands.md             # Per-OS password-storage command reference
-    └── troubleshooting.md            # Common errors with fixes
+esxi-skill/                       ← this repo (the "project")
+├── README.md                     # ← you are here (project overview)
+├── SETUP.md                      # install + first-time configuration
+├── CHANGELOG.md                  # version history
+├── CONTRIBUTING.md               # how to file issues / send PRs
+├── VERSION
+├── LICENSE                       # MIT
+├── .github/workflows/            # CI: lint markdown + python syntax check
+└── esxi/                         ← THE SKILL (this is what gets installed)
+    ├── SKILL.md                  # primary skill instructions (loaded by Claude)
+    ├── scripts/
+    │   └── esxi.py               # the wrapper: preflight / setup / g
+    ├── references/               # progressive-disclosure docs
+    │   ├── govc-reference.md
+    │   ├── common-operations.md
+    │   ├── setup-commands.md
+    │   └── troubleshooting.md
+    └── evals/
+        └── evals.json            # test prompts (scaffold; needs live ESXi)
 ```
 
-### Usage cheatsheet
+## Status
 
-```bash
-python3 <SKILL_DIR>/scripts/esxi.py preflight                       # JSON status
-python3 <SKILL_DIR>/scripts/esxi.py setup --host X --user root ...  # install + config + print pw cmd
-python3 <SKILL_DIR>/scripts/esxi.py g ls vm                         # run any govc command
-python3 <SKILL_DIR>/scripts/esxi.py --profile lab g vm.info ...     # non-default profile
-```
+- **macOS**: tested end-to-end against a live ESXi 8.0.1 host
+- **Linux**: code paths complete, **untested on a real Linux host**
+- **Windows**: DPAPI file backend designed and code-reviewed, **untested on a real Windows host**
 
-## Safety model
-
-This skill treats ESXi as **production-critical infrastructure**. Destructive operations (`vm.destroy`, `snapshot.remove`, `datastore.rm`, `host.maintenance.enter` on last host) always require explicit user confirmation. Claude will:
-
-1. Show `vm.info` before any mutation.
-2. Print the exact command it intends to run before running it.
-3. Never `vm.destroy` without first confirming the target.
-4. Warn about long-lived snapshots (disk bloat, performance impact).
-
-See `SKILL.md` § *Safety Rules* for details.
-
-## When this skill is **not** the right tool
-
-- **vSAN deep management** — use PowerCLI or vSAN REST
-- **NSX-T / HCX** — dedicated CLIs
-- **Complex idempotent state management** — use Terraform `vsphere` provider
-- **Read-only monitoring dashboard** — use Grafana + VMware exporter
-
-For those cases, use govc for the 90% of ops it handles, and fall back to the specialized tool for the 10%.
-
-## License
-
-MIT. See [LICENSE](LICENSE).
+See **[CHANGELOG.md](CHANGELOG.md)** for what changed when.
 
 ## Contributing
 
-PRs welcome. If you've got a recurring ESXi recipe that's not in `references/common-operations.md`, open an issue or PR.
+PRs welcome — bug reports, new recipes, Linux/Windows validation, additional `references/` content. See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

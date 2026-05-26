@@ -1,0 +1,42 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-syntax:
+    name: Python syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.7'
+      - name: Parse esxi.py with ast (stdlib-only, no pip install)
+        run: python -c "import ast, pathlib; ast.parse(pathlib.Path('esxi/scripts/esxi.py').read_text()); print('OK')"
+
+  markdown-links:
+    name: Markdown link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          config-file: '.github/markdown-link-check.json'
+          folder-path: '.,esxi,esxi/references'
+          max-depth: 2
+
+  skill-md-frontmatter:
+    name: SKILL.md frontmatter present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check YAML frontmatter
+        run: |
+          head -1 esxi/SKILL.md | grep -q '^---$' || { echo "esxi/SKILL.md missing YAML frontmatter start"; exit 1; }
+          grep -q '^name: esxi$' esxi/SKILL.md || { echo "esxi/SKILL.md missing 'name: esxi'"; exit 1; }
+          grep -q '^description:' esxi/SKILL.md || { echo "esxi/SKILL.md missing 'description:'"; exit 1; }
+          echo "OK"

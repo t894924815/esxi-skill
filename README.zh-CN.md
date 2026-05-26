@@ -2,155 +2,90 @@
 
 # esxi-skill
 
-一个用于管理 **VMware ESXi / vSphere** 的 [Claude Code](https://claude.ai/code) 技能，基于 `govc` CLI。
+为 [Claude Code](https://claude.ai/code) / [Codex CLI](https://github.com/openai/codex) 等 AI agent 提供的 **VMware ESXi & vSphere 管理 skill**，底层走 `govc`。
 
-专为 LLM 驱动的自动化设计：结构化 JSON 输出、启动迅速、原生支持 Unix 工具链。覆盖虚拟机生命周期、快照、存储、主机、网络、OVA 导入导出和批量操作。
+本仓库是该 skill 的**上游工程**。真正被 AI agent 加载的 skill 内容在 [`esxi/`](esxi/) 子目录里 —— 那是安装时要放进 agent skills 目录的部分。
 
-## 为什么需要一个专门的 skill
+---
 
-`govc` 功能强大，但有 400+ 个命令分布在 40+ 个分类下。LLM 在没有上下文时要么幻觉语法，要么退回到不合适的工具（PowerCLI、手动 SSH）。这个 skill 打包了：
+## 为什么需要这个 skill
 
-- **触发指引** —— Claude 知道什么时候该用它（虚拟机操作、ESXi 问题、vCenter 自动化）
-- **安全规则** —— 破坏性操作需要明确确认；快照不等于备份
-- **实战 recipe** —— 常用 playbook（健康检查、克隆 + cloud-init、批量创建、维护模式）
-- **故障排查** —— 常见错误及解决方案
-- **完整命令参考** —— 每个 `govc` 分类的参数和示例
+`govc` 是 VMware 官方的 Go CLI，覆盖 vSphere 400+ 命令、40+ 分类。功能强，但 LLM 直接用容易翻车：
 
-## 安装
+- 命令语法幻觉
+- 退回到不合适的工具（PowerCLI、手动 SSH）
+- 用过时的 `PascalCase` jq 路径（`govc 0.30+` 已切到 `camelCase`）
+- 把快照当备份用、破坏性操作不确认
+- 密码泄漏到 chat log 和 shell history
 
-把本仓库克隆到 Claude Code 的 skills 目录（clone URL 在本仓库 GitHub 页面上）。
+`esxi-skill` 把 LLM 用 `govc` 时需要的"运维常识"打包：触发规则、安全护栏、按平台分的凭据管理、常见任务 recipe、故障排查参考。
 
-| AI Agent | 安装位置 |
-|---|---|
-| **Claude Code**（全局） | `~/.claude/skills/esxi/` |
-| **Claude Code**（项目级） | `<your-project>/.claude/skills/esxi/` |
-| **OpenAI Codex CLI** | `~/.codex/skills/esxi/` |
-| **其他** | agent 自己的 skills 目录 |
+## 能干什么
 
-```bash
-git clone https://github.com/<owner>/esxi-skill <SKILL_DIR>
-```
+- **VM 生命周期**：创建 / 克隆（含 linked + cloud-init）/ 开关机 / 销毁 / 迁移
+- **快照**：创建 / 回滚 / 合并，带"长生命快照会膨胀"警告
+- **存储**：浏览 / 上传下载 / 容量报告
+- **主机**：维护模式 / esxcli 透传 / 服务控制
+- **网络**：vSwitch / DVS / port group
+- **OVA/OVF**：导入 / 导出
+- **批量操作**：健康检查、批量迁移、CSV 驱动建机
 
-## 环境要求
+## 设计亮点
 
-- **Python 3.7+**（macOS 和大部分 Linux 自带；Windows 用 `winget install Python.Python.3`）
-- 其他依赖（govc 二进制、Keychain 设置）由 skill 自动处理
+- **只读凭据消费者** —— skill 永不写密码。用户用 OS 原生命令存（macOS `security` / Linux `secret-tool` / Windows DPAPI PowerShell），skill 只读
+- **跨平台**：macOS（主力，已测）、Linux（libsecret）、Windows（DPAPI 文件）
+- **零 pip 依赖** —— 纯 Python 3.7+ stdlib
+- **单一 Python 入口** [`esxi/scripts/esxi.py`](esxi/scripts/esxi.py)，三个子命令：`preflight` / `setup` / `g`
+- **`os.execvpe` 包装器** —— Python 进程被 `govc` 替换，密码只在 `govc` 进程 env 里活几毫秒
 
-## 配置
-
-整个 skill 是一个 Python 模块 `esxi.py`。你对 Claude 说"列出 ESXi 上所有虚拟机"（还没配置过时）：
-
-| 步骤 | 谁来做 | 命令 |
-|---|---|---|
-| 1. preflight 检测 | Claude 自动 | `python3 esxi.py preflight` |
-| 2. 问 4 个非敏感字段 | Claude 在 chat 问你 | 地址/用户名/证书/datacenter |
-| 3. 装 `govc` + 写配置 | Claude 自动 | `python3 esxi.py setup --host … --user … …` |
-| 4. 存密码 | **你自己**在终端跑 | 第 3 步打印的命令（按 OS 不同） |
-| 5. 再次 preflight + 列 VM | Claude 自动 | `python3 esxi.py preflight && python3 esxi.py g ls vm` |
-
-第 4 步是唯一手动的部分。命令按你的 OS 自动选：
-
-- **macOS**: `security add-generic-password -a <user> -s govc-<host> -U -w`（原生交互提示）
-- **Linux**（有 libsecret）: `secret-tool store …`
-- **Linux**（无 libsecret）：**默认不支持** —— 让用户装 `libsecret-tools`，或用 `GOVC_PASSWORD` env var 做 CI。**故意不**回退到 chmod-600 明文文件。
-- **Windows**: PowerShell `Read-Host -AsSecureString | ConvertFrom-SecureString | Set-Content` → DPAPI 加密 hex 文件（`%APPDATA%\esxi-skill\<profile>.cred`）。明文不落盘。
-
-### 🔐 安全设计
-
-- Claude 自动做非敏感工作（节省打字），但把密码那一步交还给你 —— 凭据永远不经过 LLM、聊天记录、或 Claude 启动的任何进程
-- `esxi.py g` 用 `os.execvpe` 把 Python 进程**替换**为 govc；密码只存在于 govc 进程的环境里，Python 进程在 exec 后就不存在了
-
-完整 OS 命令参考见 [references/setup-commands.md](references/setup-commands.md)。
-
-### 多 profile
-
-多个 ESXi / vCenter 时用 `--profile` 或 `ESXI_PROFILE`：
+## 快速安装
 
 ```bash
-# 创建两个 profile
-python3 <SKILL_DIR>/scripts/esxi.py --profile prod setup --host vcenter.prod --user administrator@vsphere.local --insecure 0
-python3 <SKILL_DIR>/scripts/esxi.py --profile lab  setup --host esxi.lab      --user root                       --insecure 1
-
-# 使用（每个 profile 要各自完成一次 setup 打印的密码步骤）
-python3 <SKILL_DIR>/scripts/esxi.py --profile prod g ls vm
-ESXI_PROFILE=lab python3 <SKILL_DIR>/scripts/esxi.py g ls vm
+git clone https://github.com/<owner>/esxi-skill.git
+# 然后把 skill 子目录 symlink 到你的 agent skills 目录：
+ln -s "$(pwd)/esxi-skill/esxi" ~/.claude/skills/esxi          # Claude Code
+ln -s "$(pwd)/esxi-skill/esxi" ~/.codex/skills/esxi           # Codex CLI
 ```
 
-### （可选）在 Claude Code 设置里白名单
-
-```json
-// .claude/settings.json
-{
-  "permissions": {
-    "allow": [
-      "Bash(python3 <SKILL_DIR>/scripts/esxi.py *)"
-    ]
-  }
-}
-```
-
-## 怎么触发
-
-跟 Claude Code 说这类话：
-
-- "列出 ESXi 上所有虚拟机"
-- "更新 web-01 前帮我打个快照"
-- "哪些 datastore 使用率超过 80%？"
-- "把 esxi1.lab 上所有虚拟机迁走，我要让它进维护模式"
-- "从 ubuntu-template 克隆一个叫 app-prod 的虚拟机，4 核 8G"
-
-Claude 会直接通过 Bash 工具调用 govc，同时遵守 skill 里的安全规则（先读后改、破坏性操作先确认、优先用 JSON 输出解析）。
+完整安装步骤 + 按平台的前置依赖：**[SETUP.md](SETUP.md)**
 
 ## 目录结构
 
 ```
-esxi-skill/
-├── SKILL.md                          # 主 skill —— 触发时加载
-├── README.md                         # 英文说明
-├── README.zh-CN.md                   # 中文说明（本文件）
-├── LICENSE
-├── scripts/
-│   └── esxi.py                       # 单一 Python 入口（所有子命令）
-└── references/
-    ├── govc-reference.md             # 按分类的完整命令速查
-    ├── common-operations.md          # 12 个实战 recipe：健康检查、克隆+cloud-init、批量迁移等
-    ├── setup-commands.md             # 各操作系统的密码存储命令参考
-    └── troubleshooting.md            # 常见错误及修复方法
+esxi-skill/                       ← 本仓库（"项目"层）
+├── README.md                     # 英文项目说明
+├── README.zh-CN.md               # ← 你在这（中文项目说明）
+├── SETUP.md                      # 安装与首次配置
+├── CHANGELOG.md                  # 版本变更
+├── CONTRIBUTING.md               # 怎么提 issue / PR
+├── VERSION
+├── LICENSE                       # MIT
+├── .github/workflows/            # CI: markdown + python 语法检查
+└── esxi/                         ← skill 本身（这部分会被安装）
+    ├── SKILL.md                  # Claude 加载的 skill 指令
+    ├── scripts/
+    │   └── esxi.py               # 包装器：preflight / setup / g
+    ├── references/               # 渐进式加载的文档
+    │   ├── govc-reference.md
+    │   ├── common-operations.md
+    │   ├── setup-commands.md
+    │   └── troubleshooting.md
+    └── evals/
+        └── evals.json            # 测试 prompts（需要真 ESXi 才能跑）
 ```
 
-### 使用速查
+## 当前状态
 
-```bash
-python3 <SKILL_DIR>/scripts/esxi.py preflight                        # JSON 状态
-python3 <SKILL_DIR>/scripts/esxi.py setup --host X --user root ...   # 装 govc + 写配置 + 打印密码命令
-python3 <SKILL_DIR>/scripts/esxi.py g ls vm                          # 跑任意 govc 命令
-python3 <SKILL_DIR>/scripts/esxi.py --profile lab g vm.info ...      # 用非默认 profile
-```
+- **macOS**：在真 ESXi 8.0.1 上跑通端到端
+- **Linux**：代码路径完整，**未在真 Linux 主机验证**
+- **Windows**：DPAPI 文件方案设计 + code review 过，**未在真 Windows 验证**
 
-## 安全模型
-
-这个 skill 把 ESXi 当作**生产级关键基础设施**对待。破坏性操作（`vm.destroy`、`snapshot.remove`、`datastore.rm`、最后一台 ESXi 的维护模式）永远需要用户明确确认。Claude 会：
-
-1. 任何修改前先执行 `vm.info` 让你看清楚目标。
-2. 把即将执行的命令完整打印出来再跑。
-3. 不经过确认绝不 `vm.destroy`。
-4. 看到长生命周期快照会警告（磁盘膨胀、性能下降）。
-
-详见 `SKILL.md` § *Safety Rules*。
-
-## 什么场景**不该**用这个 skill
-
-- **vSAN 深度管理** → 用 PowerCLI 或 vSAN REST
-- **NSX-T / HCX** → 用各自的专用 CLI
-- **复杂的幂等状态管理** → 用 Terraform 的 `vsphere` provider
-- **只读监控大盘** → 用 Grafana + VMware exporter
-
-这些场景：用 govc 处理 90% 的日常操作，剩下 10% 交给专用工具。
-
-## 许可
-
-MIT。见 [LICENSE](LICENSE)。
+变更历史见 **[CHANGELOG.md](CHANGELOG.md)**
 
 ## 贡献
 
-欢迎 PR。如果你有一个反复使用但还没在 `references/common-operations.md` 里的 ESXi recipe，欢迎提 issue 或 PR。
+欢迎提 PR — bug 报告、新 recipe、Linux/Windows 验证、references 内容补充。详见 **[CONTRIBUTING.md](CONTRIBUTING.md)**
+
+## 许可
+
+MIT — 详见 [LICENSE](LICENSE)
